@@ -9,6 +9,7 @@ const prioritizedTags = ['B200', 'B300', 'B301', 'P001A']
 
 export function PresentationPage() {
   const revealRootRef = useRef(null)
+  const deckRef = useRef(null)
 
   useEffect(() => {
     if (!revealRootRef.current) return undefined
@@ -19,10 +20,11 @@ export function PresentationPage() {
       hash: true,
       transition: 'slide',
     })
-
+    deckRef.current = deck
     deck.initialize()
 
     return () => {
+      deckRef.current = null
       deck.destroy()
     }
   }, [])
@@ -82,6 +84,14 @@ export function PresentationPage() {
                   当点位不确定时，需要在 Viewer 页面人工调整 x/y/rotation 并导出 JSON。
                 </li>
               </ul>
+            <p>
+              现场打不开时请使用：
+              <a href="/presentation/live-presentation.html">静态 HTML 版</a>
+              {' / '}
+              <a href="/downloads/equipment-demo-presentation.pptx" download>
+                PPTX 下载
+              </a>
+            </p>
             </section>
           </div>
         </div>

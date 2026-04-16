@@ -1,4 +1,9 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
@@ -12,6 +17,7 @@ export const ThreeViewport = forwardRef(function ThreeViewport(
   const mountRef = useRef(null)
   const cameraRef = useRef(null)
   const controlsRef = useRef(null)
+  const initErrorRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     resetView() {
@@ -31,7 +37,18 @@ export const ThreeViewport = forwardRef(function ThreeViewport(
     const mount = mountRef.current
     if (!mount) return undefined
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    let renderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true })
+    } catch {
+      initErrorRef.current = 'WebGL initialization failed on this device/browser.'
+      if (mount) {
+        mount.innerHTML = '<div class="viewport-fallback-message">WebGL initialization failed on this device/browser.</div>'
+      }
+      return undefined
+    }
+
+    initErrorRef.current = null
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.setSize(mount.clientWidth, mount.clientHeight)
     mount.appendChild(renderer.domElement)

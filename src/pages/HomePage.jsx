@@ -34,10 +34,18 @@ export function HomePage() {
         </a>
         <a
           className="button-like secondary"
-          href="/presentation/equipment-demo.pptx"
+          href="/downloads/equipment-demo-presentation.pptx"
           download
         >
           Download PPTX
+        </a>
+        <a
+          className="button-like secondary"
+          href="/live-presentation.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open Root Live PPT
         </a>
       </div>
     </section>
