@@ -301,8 +301,102 @@ button,
   border: 1px solid #1f2937;
 }
 
+.presentation-title {
+  margin-bottom: 1rem;
+}
+
+.presentation-subtitle {
+  color: #cbd5e1;
+}
+
+.slide-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(300px, 420px);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.slide-viewport {
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.slide-viewport-header {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #334155;
+  background: #020617;
+  font-size: 0.9rem;
+  color: #bfdbfe;
+}
+
+.slide-viewport-canvas {
+  height: 360px;
+  width: 100%;
+}
+
+.coord-card {
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  text-align: left;
+  background: #0b1220;
+}
+
+.coord-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.coord-table th,
+.coord-table td {
+  border-bottom: 1px solid #1f2937;
+  padding: 0.35rem 0.4rem;
+  text-align: left;
+}
+
+.coord-table th {
+  color: #bfdbfe;
+  font-weight: 600;
+}
+
+.status-badge {
+  display: inline-block;
+  border-radius: 9999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid #334155;
+}
+
+.status-badge.approximate {
+  color: #fbbf24;
+  border-color: #f59e0b;
+}
+
+.status-badge.corrected {
+  color: #34d399;
+  border-color: #10b981;
+}
+
+.status-badge.unresolved {
+  color: #fca5a5;
+  border-color: #ef4444;
+}
+
+.mini-note {
+  margin-top: 0.7rem;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
 @media (max-width: 1200px) {
   .viewer-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .slide-grid {
     grid-template-columns: 1fr;
   }
 

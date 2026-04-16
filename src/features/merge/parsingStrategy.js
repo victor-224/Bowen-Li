@@ -12,6 +12,8 @@ function normalizeType(typeValue = '') {
 
 function normalizeOrientation(orientationValue = '') {
   const cleaned = String(orientationValue).trim().toLowerCase()
+  if (cleaned === 'v') return 'vertical'
+  if (cleaned === 'h') return 'horizontal'
   if (cleaned.startsWith('vert')) return 'vertical'
   if (cleaned.startsWith('horiz')) return 'horizontal'
   return 'unknown'
