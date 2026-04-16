@@ -257,6 +257,11 @@ input {
   overflow: hidden;
 }
 
+.stacked-viewports {
+  display: grid;
+  gap: 0.75rem;
+}
+
 .viewport-label {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid #1f2937;
@@ -267,6 +272,82 @@ input {
 .viewport-canvas {
   width: 100%;
   height: 560px;
+}
+
+.plan-shell {
+  border: 1px solid #1f2937;
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: #020617;
+}
+
+.plan-board-wrap {
+  padding: 0.75rem;
+}
+
+.plan-board {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-height: 360px;
+  border: 1px dashed #334155;
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(to right, rgba(30, 41, 59, 0.45) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 41, 59, 0.45) 1px, transparent 1px),
+    #0b1220;
+  background-size: 24px 24px;
+}
+
+.plan-dot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 1px solid #1e293b;
+  background: #334155;
+  color: #e2e8f0;
+  font-size: 0.63rem;
+  font-weight: 700;
+  padding: 0;
+}
+
+.plan-dot.approximate {
+  background: #854d0e;
+  border-color: #f59e0b;
+}
+
+.plan-dot.corrected {
+  background: #065f46;
+  border-color: #10b981;
+}
+
+.plan-dot.unresolved {
+  background: #7f1d1d;
+  border-color: #ef4444;
+}
+
+.plan-dot.selected {
+  box-shadow: 0 0 0 2px #93c5fd;
+  z-index: 2;
+}
+
+.plan-dot-label {
+  position: absolute;
+  top: calc(100% + 0.2rem);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.58rem;
+  color: #cbd5e1;
+  pointer-events: none;
+}
+
+.plan-help {
+  margin: 0.6rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.85rem;
 }
 
 .action-row {
