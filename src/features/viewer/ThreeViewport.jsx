@@ -5,7 +5,10 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 const defaultCameraPosition = new THREE.Vector3(30, 24, 30)
 const focusPoint = new THREE.Vector3(0, 0, 0)
 
-export const ThreeViewport = forwardRef(function ThreeViewport(_, ref) {
+export const ThreeViewport = forwardRef(function ThreeViewport(
+  { height = 560, compact = false },
+  ref,
+) {
   const mountRef = useRef(null)
   const cameraRef = useRef(null)
   const controlsRef = useRef(null)
@@ -91,10 +94,14 @@ export const ThreeViewport = forwardRef(function ThreeViewport(_, ref) {
     }
   }, [])
 
+  const shellClass = compact ? 'viewport-shell compact' : 'viewport-shell'
+
   return (
-    <div className="viewport-shell">
-      <div className="viewport-label">Three.js + OrbitControls scaffold</div>
-      <div className="viewport-canvas" ref={mountRef} />
+    <div className={shellClass}>
+      {!compact ? (
+        <div className="viewport-label">Three.js + OrbitControls scaffold</div>
+      ) : null}
+      <div className="viewport-canvas" ref={mountRef} style={{ height }} />
     </div>
   )
 })

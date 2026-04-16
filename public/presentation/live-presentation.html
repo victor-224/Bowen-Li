@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Equipment Demo - Live Presentation</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #111827;
+        --border: #1f2937;
+        --text: #e2e8f0;
+        --muted: #cbd5e1;
+        --accent: #60a5fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        gap: 16px;
+      }
+      section {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      h1,
+      h2 {
+        margin: 0 0 8px;
+      }
+      p,
+      li {
+        color: var(--muted);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 12px;
+      }
+      .model-preview {
+        min-height: 280px;
+        border: 1px dashed #334155;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #334155;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        border: 1px solid #334155;
+        background: #1e293b;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 12px;
+        text-decoration: none;
+      }
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h1>设备点位展示（现场稳定版）</h1>
+        <p>
+          这是无需 React 路由的静态现场版网页 PPT。用于确保演示时一定能打开。
+        </p>
+      </section>
+
+      <section>
+        <h2>模型展示页（示例）</h2>
+        <div class="layout">
+          <div class="model-preview">3D MODEL PREVIEW AREA</div>
+          <div>
+            <table>
+              <thead>
+                <tr>
+                  <th>tag</th>
+                  <th>x</th>
+                  <th>y</th>
+                  <th>status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>B200</td>
+                  <td>8.2</td>
+                  <td>4.7</td>
+                  <td>approximate</td>
+                </tr>
+                <tr>
+                  <td>B300</td>
+                  <td>11.4</td>
+                  <td>5.8</td>
+                  <td>approximate</td>
+                </tr>
+                <tr>
+                  <td>P001A</td>
+                  <td>13.8</td>
+                  <td>11.2</td>
+                  <td>approximate</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>规则说明</h2>
+        <ul>
+          <li>Excel 是 TAG、尺寸、方向的权威来源。</li>
+          <li>2D PDF 仅提供近似坐标参考。</li>
+          <li>不确定坐标必须标记 approximate/unresolved + confidence。</li>
+        </ul>
+      </section>
+
+      <section>
+        <div class="actions">
+          <a class="btn" href="/presentation">打开 React 网页 PPT</a>
+          <a class="btn" href="/presentation/equipment-demo-live.pptx">下载 PPTX</a>
+          <a class="btn" href="/viewer">打开 Viewer</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

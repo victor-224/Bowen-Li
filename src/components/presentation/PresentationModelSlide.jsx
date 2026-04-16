@@ -19,7 +19,7 @@ export function PresentationModelSlide() {
   return (
     <div className="ppt-model-slide">
       <div className="ppt-model-left">
-        <ThreeViewport />
+        <ThreeViewport compact height={300} />
         <p className="ppt-tip">
           3D model is a simplified geometry preview used for web presentation.
         </p>

@@ -24,6 +24,21 @@ export function HomePage() {
         <Link className="button-like secondary" to="/presentation">
           Open Presentation
         </Link>
+        <a
+          className="button-like secondary"
+          href="/presentation/live-presentation.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open Live HTML PPT
+        </a>
+        <a
+          className="button-like secondary"
+          href="/presentation/equipment-demo.pptx"
+          download
+        >
+          Download PPTX
+        </a>
       </div>
     </section>
   )
