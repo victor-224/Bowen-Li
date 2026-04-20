@@ -1,14 +1,23 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 const defaultCameraPosition = new THREE.Vector3(30, 24, 30)
 const focusPoint = new THREE.Vector3(0, 0, 0)
 
-export const ThreeViewport = forwardRef(function ThreeViewport(_, ref) {
+export const ThreeViewport = forwardRef(function ThreeViewport(
+  { height = 560, compact = false },
+  ref,
+) {
   const mountRef = useRef(null)
   const cameraRef = useRef(null)
   const controlsRef = useRef(null)
+  const initErrorRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     resetView() {
@@ -28,7 +37,18 @@ export const ThreeViewport = forwardRef(function ThreeViewport(_, ref) {
     const mount = mountRef.current
     if (!mount) return undefined
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    let renderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true })
+    } catch {
+      initErrorRef.current = 'WebGL initialization failed on this device/browser.'
+      if (mount) {
+        mount.innerHTML = '<div class="viewport-fallback-message">WebGL initialization failed on this device/browser.</div>'
+      }
+      return undefined
+    }
+
+    initErrorRef.current = null
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.setSize(mount.clientWidth, mount.clientHeight)
     mount.appendChild(renderer.domElement)
@@ -91,10 +111,14 @@ export const ThreeViewport = forwardRef(function ThreeViewport(_, ref) {
     }
   }, [])
 
+  const shellClass = compact ? 'viewport-shell compact' : 'viewport-shell'
+
   return (
-    <div className="viewport-shell">
-      <div className="viewport-label">Three.js + OrbitControls scaffold</div>
-      <div className="viewport-canvas" ref={mountRef} />
+    <div className={shellClass}>
+      {!compact ? (
+        <div className="viewport-label">Three.js + OrbitControls scaffold</div>
+      ) : null}
+      <div className="viewport-canvas" ref={mountRef} style={{ height }} />
     </div>
   )
 })

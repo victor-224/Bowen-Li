@@ -2,12 +2,34 @@ import { useMemo, useRef, useState } from 'react'
 import { mergedScaffoldDataset } from '../features/merge/sampleSourceData.js'
 import { mergedEquipmentSchema } from '../features/merge/mergedSchema.js'
 import { ThreeViewport } from '../features/viewer/ThreeViewport.jsx'
+import { Plan2DOverlay } from '../features/viewer/Plan2DOverlay.jsx'
 import { downloadJsonFile } from '../utils/downloadJson.js'
 
 function parseNumberOrNull(value) {
   if (value === '' || value === null || value === undefined) return null
   const numeric = Number(value)
   return Number.isNaN(numeric) ? null : numeric
+}
+
+function clamp01(value) {
+  if (value <= 0) return 0
+  if (value >= 1) return 1
+  return value
+}
+
+function toPlanPoint(record) {
+  const x = record.position.x
+  const y = record.position.y
+  if (typeof x !== 'number' || typeof y !== 'number') return null
+  return {
+    id: record.id,
+    tag: record.tag,
+    xPercent: clamp01(x / 30),
+    yPercent: clamp01(y / 18),
+    confidence: record.confidence,
+    status: record.positionStatus,
+    sourcePage: record.source?.pdf2d?.page ?? null,
+  }
 }
 
 export function ViewerPage() {
@@ -31,6 +53,10 @@ export function ViewerPage() {
 
   const unresolvedRecords = useMemo(() => {
     return records.filter((record) => record.positionStatus !== 'corrected')
+  }, [records])
+
+  const planPoints = useMemo(() => {
+    return records.map(toPlanPoint).filter(Boolean)
   }, [records])
 
   const updateSelectedPosition = (field, rawValue) => {
@@ -121,6 +147,13 @@ export function ViewerPage() {
 
       <div className="center-panel">
         <ThreeViewport ref={viewportRef} />
+        <Plan2DOverlay
+          title="Plan 2D clickable map"
+          planHref="/plans/annexe-1-layout-train.pdf"
+          points={planPoints}
+          selectedId={selectedId}
+          onPointClick={setSelectedId}
+        />
         <div className="action-row">
           <button onClick={() => viewportRef.current?.resetView()}>Reset View</button>
           <button onClick={() => viewportRef.current?.focusSelected()}>

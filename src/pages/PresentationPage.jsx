@@ -2,9 +2,14 @@ import { useEffect, useRef } from 'react'
 import Reveal from 'reveal.js'
 import 'reveal.js/reveal.css'
 import 'reveal.js/theme/black.css'
+import { mergedScaffoldDataset } from '../features/merge/sampleSourceData.js'
+import { PresentationModelSlide } from '../components/presentation/PresentationModelSlide.jsx'
+
+const prioritizedTags = ['B200', 'B300', 'B301', 'P001A']
 
 export function PresentationPage() {
   const revealRootRef = useRef(null)
+  const deckRef = useRef(null)
 
   useEffect(() => {
     if (!revealRootRef.current) return undefined
@@ -15,41 +20,80 @@ export function PresentationPage() {
       hash: true,
       transition: 'slide',
     })
-
+    deckRef.current = deck
     deck.initialize()
 
     return () => {
+      deckRef.current = null
       deck.destroy()
     }
   }, [])
 
+  const prioritizedEquipment = prioritizedTags
+    .map((tag) => mergedScaffoldDataset.equipment.find((record) => record.tag === tag))
+    .filter(Boolean)
+
+  const fallbackEquipment = mergedScaffoldDataset.equipment.slice(
+    0,
+    Math.max(0, 4 - prioritizedEquipment.length),
+  )
+
+  const demoEquipment = [...prioritizedEquipment, ...fallbackEquipment].slice(0, 4)
+
   return (
-    <div className="presentation-wrap">
-      <div className="reveal" ref={revealRootRef}>
-        <div className="slides">
-          <section>
-            <h2>Equipment Viewer Scaffold</h2>
-            <p>React + Vite with /viewer and /presentation routes.</p>
-          </section>
-          <section>
-            <h2>Data Authority Rules</h2>
-            <ul>
-              <li>Excel is source of truth for tag, size, and orientation.</li>
-              <li>2D PDF contributes approximate x/y/rotation only.</li>
-              <li>No guessed exact coordinates.</li>
-            </ul>
-          </section>
-          <section>
-            <h2>Position Uncertainty + Manual Correction</h2>
-            <ul>
-              <li>Each item carries status: corrected, approximate, or unresolved.</li>
-              <li>Each position includes confidence (0.00 - 1.00).</li>
-              <li>
-                Manual editor allows x/y/rotation correction and JSON export for
-                traceable updates.
-              </li>
-            </ul>
-          </section>
+    <div>
+      <div className="action-row" style={{ marginBottom: '0.75rem' }}>
+        <a
+          className="button-like secondary"
+          href="/presentation-live.html"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open static live presentation
+        </a>
+        <a className="button-like" href="/现场演示-设备坐标模型.pptx" download>
+          Download PPTX
+        </a>
+      </div>
+
+      <div className="presentation-wrap">
+        <div className="reveal" ref={revealRootRef}>
+          <div className="slides">
+            <section>
+              <h2>设备点位 3D 展示（Web PPT）</h2>
+              <p>React + Vite + Reveal.js：用于演示从设备标签到模型坐标的转换结果。</p>
+            </section>
+            <section>
+              <h2>模型展示页（示例点位）</h2>
+              <PresentationModelSlide equipment={demoEquipment} />
+            </section>
+            <section>
+              <h2>数据权威规则（关键）</h2>
+              <ul>
+                <li>Excel 是 TAG、尺寸、方向的唯一权威来源。</li>
+                <li>2D PDF 只提供近似 x/y/rotation，不能当精确坐标。</li>
+                <li>禁止猜测精确坐标。</li>
+              </ul>
+            </section>
+            <section>
+              <h2>不确定性与人工修正</h2>
+              <ul>
+                <li>每个设备点位都有状态：corrected / approximate / unresolved。</li>
+                <li>每个坐标都带 confidence（0.00 - 1.00）。</li>
+                <li>
+                  当点位不确定时，需要在 Viewer 页面人工调整 x/y/rotation 并导出 JSON。
+                </li>
+              </ul>
+            <p>
+              现场打不开时请使用：
+              <a href="/presentation/live-presentation.html">静态 HTML 版</a>
+              {' / '}
+              <a href="/downloads/equipment-demo-presentation.pptx" download>
+                PPTX 下载
+              </a>
+            </p>
+            </section>
+          </div>
         </div>
       </div>
     </div>
