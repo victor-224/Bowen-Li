@@ -18,12 +18,103 @@
       overflow: hidden;
       height: 100%;
     }
-    canvas {
+    body {
+      display: flex;
+      flex-direction: row;
+      font-family: system-ui, sans-serif;
+    }
+    #assetPanel {
+      width: 220px;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      padding: 14px 12px;
+      background: #242428;
+      color: #e8e8ec;
+      border-right: 1px solid #3a3a42;
+      user-select: none;
+    }
+    #assetPanel h2 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    #assetPanel .hint {
+      margin: 0 0 14px;
+      font-size: 12px;
+      color: #9898a4;
+      line-height: 1.35;
+    }
+    .asset-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .asset-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #3e3e48;
+      border-radius: 8px;
+      background: #2c2c32;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: grab;
+      touch-action: none;
+    }
+    .asset-card:hover {
+      border-color: #5a5a68;
+      background: #32323a;
+    }
+    .asset-card:active {
+      cursor: grabbing;
+    }
+    .asset-icon {
+      font-size: 18px;
+      opacity: 0.9;
+      width: 1.25em;
+      text-align: center;
+    }
+    .asset-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    #viewport {
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+    }
+    #viewport canvas {
       display: block;
+      width: 100%;
+      height: 100%;
     }
   </style>
 </head>
 <body>
+  <aside id="assetPanel" aria-label="Asset library">
+    <h2>Assets</h2>
+    <p class="hint">Drag an asset into the viewport to place it on the grid.</p>
+    <div class="asset-list">
+      <button type="button" class="asset-card" data-asset="cube" title="Drag into scene">
+        <span class="asset-icon" aria-hidden="true">▢</span>
+        <span class="asset-name">Cube</span>
+      </button>
+      <button type="button" class="asset-card" data-asset="chair" title="Drag into scene">
+        <span class="asset-icon" aria-hidden="true">⌂</span>
+        <span class="asset-name">Chair</span>
+      </button>
+      <button type="button" class="asset-card" data-asset="table" title="Drag into scene">
+        <span class="asset-icon" aria-hidden="true">▭</span>
+        <span class="asset-name">Table</span>
+      </button>
+    </div>
+  </aside>
+  <div id="viewport"></div>
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -39,10 +130,11 @@
     );
     camera.position.set(8, 6, 10);
 
+    const viewport = document.getElementById('viewport');
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+    renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+    viewport.appendChild(renderer.domElement);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 
@@ -58,11 +150,14 @@
     const plane = new THREE.Plane();
     const planeHit = new THREE.Vector3();
     const dragOffset = new THREE.Vector3();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
     const selectableMeshes = [];
     let selectedRoot = null;
     let dragging = false;
     let dragPointerId = null;
+
+    let spawnFromPanel = null;
 
     function applyEmissive(root, value) {
       root.traverse((child) => {
@@ -88,71 +183,134 @@
       return null;
     }
 
-    function addDraggable(name, build) {
-      const root = new THREE.Group();
-      root.userData.draggable = true;
-      root.userData.label = name;
-      build(root);
+    function cloneMeshMaterial(mesh) {
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map((m) => m.clone());
+      } else if (mesh.material) {
+        mesh.material = mesh.material.clone();
+      }
+    }
+
+    function registerSelectable(root) {
       root.traverse((child) => {
         if (child.isMesh) {
+          cloneMeshMaterial(child);
           child.userData.selectRoot = root;
           selectableMeshes.push(child);
         }
       });
-      scene.add(root);
-      return root;
+    }
+
+    function unregisterSelectable(root) {
+      for (let i = selectableMeshes.length - 1; i >= 0; i -= 1) {
+        if (selectableMeshes[i].userData.selectRoot === root) {
+          selectableMeshes.splice(i, 1);
+        }
+      }
+    }
+
+    function disposeObject3D(obj) {
+      obj.traverse((child) => {
+        if (!child.isMesh) return;
+        if (child.geometry) child.geometry.dispose();
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) {
+          if (m && typeof m.dispose === 'function') m.dispose();
+        }
+      });
+    }
+
+    function applyGhostOpacity(root, opacity) {
+      root.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const m of mats) {
+          if (!m) continue;
+          m.transparent = opacity < 1;
+          m.opacity = opacity;
+          m.depthWrite = opacity >= 1;
+        }
+      });
+    }
+
+    function raycastGroundFromClient(clientX, clientY, out) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+        return false;
+      }
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      return raycaster.ray.intersectPlane(groundPlane, out);
+    }
+
+    function isPointerOverViewport(clientX, clientY) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
     }
 
     const matCube = new THREE.MeshStandardMaterial({ color: 0x6b8cae, roughness: 0.45, metalness: 0.1 });
     const matChair = new THREE.MeshStandardMaterial({ color: 0x8a6b5c, roughness: 0.55, metalness: 0.05 });
     const matTable = new THREE.MeshStandardMaterial({ color: 0x5c6b5a, roughness: 0.5, metalness: 0.08 });
 
-    const cubeRoot = addDraggable('cube', (g) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), matCube);
-      mesh.position.y = 0.5;
-      mesh.castShadow = true;
-      g.add(mesh);
-    });
-    const chairRoot = addDraggable('chair', (g) => {
-      const seat = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 1), matChair);
-      seat.position.set(0, 0.55, 0);
-      seat.castShadow = true;
-      g.add(seat);
-      const back = new THREE.Mesh(new THREE.BoxGeometry(1, 0.9, 0.12), matChair);
-      back.position.set(0, 1.0, -0.44);
-      back.castShadow = true;
-      g.add(back);
-      const legGeo = new THREE.BoxGeometry(0.1, 0.5, 0.1);
-      const legY = 0.25;
-      const lx = 0.38;
-      const lz = 0.38;
-      for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
-        const leg = new THREE.Mesh(legGeo, matChair);
-        leg.position.set(sx, legY, sz);
-        leg.castShadow = true;
-        g.add(leg);
+    function buildAssetRoot(assetId) {
+      const root = new THREE.Group();
+      root.userData.draggable = true;
+      root.userData.label = assetId;
+      if (assetId === 'cube') {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), matCube);
+        mesh.position.y = 0.5;
+        mesh.castShadow = true;
+        root.add(mesh);
+      } else if (assetId === 'chair') {
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 1), matChair);
+        seat.position.set(0, 0.55, 0);
+        seat.castShadow = true;
+        root.add(seat);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(1, 0.9, 0.12), matChair);
+        back.position.set(0, 1.0, -0.44);
+        back.castShadow = true;
+        root.add(back);
+        const legGeo = new THREE.BoxGeometry(0.1, 0.5, 0.1);
+        const legY = 0.25;
+        const lx = 0.38;
+        const lz = 0.38;
+        for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
+          const leg = new THREE.Mesh(legGeo, matChair);
+          leg.position.set(sx, legY, sz);
+          leg.castShadow = true;
+          root.add(leg);
+        }
+      } else if (assetId === 'table') {
+        const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 1.2), matTable);
+        top.position.set(0, 0.75, 0);
+        top.castShadow = true;
+        root.add(top);
+        const legGeo = new THREE.BoxGeometry(0.12, 0.75, 0.12);
+        const ly = 0.375;
+        const lx = 0.95;
+        const lz = 0.45;
+        for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
+          const leg = new THREE.Mesh(legGeo, matTable);
+          leg.position.set(sx, ly, sz);
+          leg.castShadow = true;
+          root.add(leg);
+        }
       }
-    });
-    const tableRoot = addDraggable('table', (g) => {
-      const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 1.2), matTable);
-      top.position.set(0, 0.75, 0);
-      top.castShadow = true;
-      g.add(top);
-      const legGeo = new THREE.BoxGeometry(0.12, 0.75, 0.12);
-      const ly = 0.375;
-      const lx = 0.95;
-      const lz = 0.45;
-      for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
-        const leg = new THREE.Mesh(legGeo, matTable);
-        leg.position.set(sx, ly, sz);
-        leg.castShadow = true;
-        g.add(leg);
-      }
-    });
+      return root;
+    }
 
-    cubeRoot.position.set(-2, 0, 1);
-    chairRoot.position.set(1.5, 0, -1);
-    tableRoot.position.set(0, 0, 2.5);
+    function spawnAssetAt(assetId, x, z) {
+      const root = buildAssetRoot(assetId);
+      root.position.set(x, 0, z);
+      registerSelectable(root);
+      scene.add(root);
+      return root;
+    }
+
+    spawnAssetAt('cube', -2, 1);
+    spawnAssetAt('chair', 1.5, -1);
+    spawnAssetAt('table', 0, 2.5);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -197,6 +355,7 @@
     }
 
     function onPointerDown(event) {
+      if (spawnFromPanel) return;
       if (event.button !== 0) return;
       setPointerFromEvent(event);
       const root = pickDraggableAtEvent(event);
@@ -222,10 +381,68 @@
     renderer.domElement.addEventListener('pointerup', endDrag);
     renderer.domElement.addEventListener('pointercancel', endDrag);
 
+    function startPanelSpawn(assetId, event) {
+      if (spawnFromPanel || dragging) return;
+      if (event.button !== 0) return;
+      const ghost = spawnAssetAt(assetId, 0, 0);
+      applyGhostOpacity(ghost, 0.5);
+      spawnFromPanel = { pointerId: event.pointerId, ghost };
+      controls.enabled = false;
+      if (raycastGroundFromClient(event.clientX, event.clientY, planeHit)) {
+        ghost.position.x = planeHit.x;
+        ghost.position.z = planeHit.z;
+      }
+    }
+
+    function onWindowPointerMove(event) {
+      if (!spawnFromPanel || event.pointerId !== spawnFromPanel.pointerId) return;
+      if (raycastGroundFromClient(event.clientX, event.clientY, planeHit)) {
+        spawnFromPanel.ghost.position.x = planeHit.x;
+        spawnFromPanel.ghost.position.z = planeHit.z;
+      }
+    }
+
+    function onWindowPointerUp(event) {
+      if (!spawnFromPanel || event.pointerId !== spawnFromPanel.pointerId) return;
+      const { ghost } = spawnFromPanel;
+      spawnFromPanel = null;
+      const over = isPointerOverViewport(event.clientX, event.clientY);
+      let placed = false;
+      if (over && raycastGroundFromClient(event.clientX, event.clientY, planeHit)) {
+        ghost.position.x = planeHit.x;
+        ghost.position.z = planeHit.z;
+        placed = true;
+      }
+      if (placed) {
+        applyGhostOpacity(ghost, 1);
+        setSelected(ghost);
+      } else {
+        scene.remove(ghost);
+        unregisterSelectable(ghost);
+        disposeObject3D(ghost);
+        if (selectedRoot === ghost) setSelected(null);
+      }
+      controls.enabled = true;
+    }
+
+    window.addEventListener('pointermove', onWindowPointerMove);
+    window.addEventListener('pointerup', onWindowPointerUp);
+    window.addEventListener('pointercancel', onWindowPointerUp);
+
+    const assetPanel = document.getElementById('assetPanel');
+    assetPanel.querySelectorAll('.asset-card').forEach((btn) => {
+      btn.addEventListener('pointerdown', (event) => {
+        const id = btn.dataset.asset;
+        if (!id) return;
+        event.preventDefault();
+        startPanelSpawn(id, event);
+      });
+    });
+
     function onResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.aspect = viewport.clientWidth / viewport.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setSize(viewport.clientWidth, viewport.clientHeight);
     }
     window.addEventListener('resize', onResize);
 
