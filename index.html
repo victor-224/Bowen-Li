@@ -24,7 +24,7 @@
       font-family: system-ui, sans-serif;
     }
     #assetPanel {
-      width: 220px;
+      width: 248px;
       flex-shrink: 0;
       box-sizing: border-box;
       padding: 14px 12px;
@@ -82,6 +82,83 @@
       font-size: 13px;
       font-weight: 500;
     }
+    #assetPanel .section-title {
+      margin: 18px 0 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #c8c8d0;
+    }
+    .form-row {
+      margin-bottom: 10px;
+    }
+    .form-row label {
+      display: block;
+      font-size: 11px;
+      color: #9898a4;
+      margin-bottom: 4px;
+    }
+    .form-row input[type="range"] {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .form-row .value {
+      font-size: 11px;
+      color: #b0b0bc;
+      margin-top: 2px;
+    }
+    .file-btn {
+      display: inline-block;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #3e3e48;
+      background: #2c2c32;
+      color: #e8e8ec;
+      font-size: 12px;
+      text-align: center;
+      cursor: pointer;
+    }
+    .file-btn:hover {
+      border-color: #5a5a68;
+      background: #32323a;
+    }
+    #floorplanFile {
+      position: absolute;
+      width: 0;
+      height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: #c8c8d0;
+    }
+    .check-row input {
+      margin: 0;
+    }
+    .btn-secondary {
+      width: 100%;
+      margin-top: 6px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #4a3a3a;
+      background: #322828;
+      color: #e0c8c8;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn-secondary:hover {
+      background: #3a2c2c;
+    }
+    .btn-secondary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     #viewport {
       flex: 1;
       min-width: 0;
@@ -113,6 +190,35 @@
         <span class="asset-name">Table</span>
       </button>
     </div>
+    <h3 class="section-title">Floor plan</h3>
+    <p class="hint" style="margin-bottom: 10px;">Upload an image as a semi-transparent ground overlay. Adjust size and position to align with the grid.</p>
+    <input type="file" id="floorplanFile" accept="image/*" />
+    <label class="file-btn" for="floorplanFile">Upload image…</label>
+    <div class="form-row">
+      <label for="floorOpacity">Opacity <span id="floorOpacityVal" class="value"></span></label>
+      <input type="range" id="floorOpacity" min="0.05" max="1" step="0.05" value="0.6" />
+    </div>
+    <div class="form-row">
+      <label for="floorWidth">Width (m) <span id="floorWidthVal" class="value"></span></label>
+      <input type="range" id="floorWidth" min="2" max="80" step="0.5" value="14" />
+    </div>
+    <div class="check-row">
+      <input type="checkbox" id="floorAspectLock" checked />
+      <label for="floorAspectLock">Lock image aspect</label>
+    </div>
+    <div class="form-row" id="floorDepthRow" style="display: none;">
+      <label for="floorDepth">Depth (m) <span id="floorDepthVal" class="value"></span></label>
+      <input type="range" id="floorDepth" min="2" max="80" step="0.5" value="10" />
+    </div>
+    <div class="form-row">
+      <label for="floorPosX">Position X <span id="floorPosXVal" class="value"></span></label>
+      <input type="range" id="floorPosX" min="-30" max="30" step="0.1" value="0" />
+    </div>
+    <div class="form-row">
+      <label for="floorPosZ">Position Z <span id="floorPosZVal" class="value"></span></label>
+      <input type="range" id="floorPosZ" min="-30" max="30" step="0.1" value="0" />
+    </div>
+    <button type="button" class="btn-secondary" id="floorRemove" disabled>Remove floor plan</button>
   </aside>
   <div id="viewport"></div>
   <script type="module">
@@ -144,6 +250,178 @@
 
     const grid = new THREE.GridHelper(40, 40, 0x44444a, 0x2a2a30);
     scene.add(grid);
+
+    const floorPlanGroup = new THREE.Group();
+    floorPlanGroup.visible = false;
+    scene.add(floorPlanGroup);
+
+    let floorPlanMesh = null;
+    let floorPlanTexture = null;
+    let floorPlanObjectUrl = null;
+    const floorPlanState = {
+      aspect: 1,
+      width: 14,
+      depth: 10,
+      opacity: 0.6,
+      posX: 0,
+      posZ: 0,
+      aspectLock: true,
+    };
+
+    const floorOpacityInput = document.getElementById('floorOpacity');
+    const floorWidthInput = document.getElementById('floorWidth');
+    const floorDepthInput = document.getElementById('floorDepth');
+    const floorDepthRow = document.getElementById('floorDepthRow');
+    const floorAspectLockInput = document.getElementById('floorAspectLock');
+    const floorPosXInput = document.getElementById('floorPosX');
+    const floorPosZInput = document.getElementById('floorPosZ');
+    const floorRemoveBtn = document.getElementById('floorRemove');
+    const floorplanFileInput = document.getElementById('floorplanFile');
+
+    let floorPlanRaycastRestore = null;
+
+    function setFloorPlanRaycastEnabled(enabled) {
+      if (!floorPlanMesh) return;
+      if (enabled) {
+        floorPlanMesh.raycast = floorPlanRaycastRestore || THREE.Mesh.prototype.raycast.bind(floorPlanMesh);
+      } else {
+        if (!floorPlanRaycastRestore) {
+          floorPlanRaycastRestore = floorPlanMesh.raycast.bind(floorPlanMesh);
+        }
+        floorPlanMesh.raycast = () => {};
+      }
+    }
+
+    function applyFloorPlanTransform() {
+      if (!floorPlanMesh) return;
+      const w = floorPlanState.width;
+      const d = floorPlanState.aspectLock ? w / floorPlanState.aspect : floorPlanState.depth;
+      floorPlanMesh.scale.set(w, d, 1);
+      floorPlanMesh.position.set(floorPlanState.posX, 0.002, floorPlanState.posZ);
+      floorPlanMesh.material.opacity = floorPlanState.opacity;
+    }
+
+    function syncFloorPlanUiLabels() {
+      document.getElementById('floorOpacityVal').textContent = `(${floorPlanState.opacity.toFixed(2)})`;
+      document.getElementById('floorWidthVal').textContent = `(${floorPlanState.width.toFixed(1)})`;
+      document.getElementById('floorDepthVal').textContent = `(${floorPlanState.depth.toFixed(1)})`;
+      document.getElementById('floorPosXVal').textContent = `(${floorPlanState.posX.toFixed(1)})`;
+      document.getElementById('floorPosZVal').textContent = `(${floorPlanState.posZ.toFixed(1)})`;
+    }
+
+    function updateFloorAspectLockUi() {
+      const locked = floorAspectLockInput.checked;
+      floorPlanState.aspectLock = locked;
+      floorDepthRow.style.display = locked ? 'none' : 'block';
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    }
+
+    function disposeFloorPlanTexture() {
+      if (floorPlanObjectUrl) {
+        URL.revokeObjectURL(floorPlanObjectUrl);
+        floorPlanObjectUrl = null;
+      }
+      if (floorPlanTexture) {
+        floorPlanTexture.dispose();
+        floorPlanTexture = null;
+      }
+    }
+
+    function removeFloorPlan() {
+      setFloorPlanRaycastEnabled(true);
+      if (floorPlanMesh) {
+        floorPlanGroup.remove(floorPlanMesh);
+        if (floorPlanMesh.geometry) floorPlanMesh.geometry.dispose();
+        if (floorPlanMesh.material) floorPlanMesh.material.dispose();
+        floorPlanMesh = null;
+      }
+      disposeFloorPlanTexture();
+      floorPlanGroup.visible = false;
+      floorRemoveBtn.disabled = true;
+      floorPlanRaycastRestore = null;
+    }
+
+    function installFloorPlanTexture(texture) {
+      removeFloorPlan();
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      floorPlanTexture = texture;
+      if (texture.image && texture.image.width) {
+        floorPlanState.aspect = texture.image.width / texture.image.height;
+      } else {
+        floorPlanState.aspect = 1;
+      }
+
+      const geom = new THREE.PlaneGeometry(1, 1);
+      const mat = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: floorPlanState.opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      floorPlanMesh = new THREE.Mesh(geom, mat);
+      floorPlanMesh.rotation.x = -Math.PI / 2;
+      floorPlanRaycastRestore = null;
+      setFloorPlanRaycastEnabled(false);
+      floorPlanGroup.add(floorPlanMesh);
+      floorPlanGroup.visible = true;
+      floorRemoveBtn.disabled = false;
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    }
+
+    floorOpacityInput.addEventListener('input', () => {
+      floorPlanState.opacity = parseFloat(floorOpacityInput.value);
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    });
+    floorWidthInput.addEventListener('input', () => {
+      floorPlanState.width = parseFloat(floorWidthInput.value);
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    });
+    floorDepthInput.addEventListener('input', () => {
+      floorPlanState.depth = parseFloat(floorDepthInput.value);
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    });
+    floorPosXInput.addEventListener('input', () => {
+      floorPlanState.posX = parseFloat(floorPosXInput.value);
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    });
+    floorPosZInput.addEventListener('input', () => {
+      floorPlanState.posZ = parseFloat(floorPosZInput.value);
+      applyFloorPlanTransform();
+      syncFloorPlanUiLabels();
+    });
+    floorAspectLockInput.addEventListener('change', updateFloorAspectLockUi);
+    floorRemoveBtn.addEventListener('click', () => {
+      removeFloorPlan();
+      floorplanFileInput.value = '';
+    });
+
+    floorplanFileInput.addEventListener('change', () => {
+      const file = floorplanFileInput.files && floorplanFileInput.files[0];
+      if (!file) return;
+      disposeFloorPlanTexture();
+      floorPlanObjectUrl = URL.createObjectURL(file);
+      new THREE.TextureLoader().load(
+        floorPlanObjectUrl,
+        (tex) => {
+          installFloorPlanTexture(tex);
+        },
+        undefined,
+        () => {
+          removeFloorPlan();
+        }
+      );
+    });
+
+    syncFloorPlanUiLabels();
+    updateFloorAspectLockUi();
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
