@@ -53,10 +53,174 @@
     const grid = new THREE.GridHelper(40, 40, 0x44444a, 0x2a2a30);
     scene.add(grid);
 
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const plane = new THREE.Plane();
+    const planeHit = new THREE.Vector3();
+    const dragOffset = new THREE.Vector3();
+
+    const selectableMeshes = [];
+    let selectedRoot = null;
+    let dragging = false;
+    let dragPointerId = null;
+
+    function applyEmissive(root, value) {
+      root.traverse((child) => {
+        if (child.isMesh && child.material && 'emissive' in child.material) {
+          child.material.emissive.setHex(value);
+        }
+      });
+    }
+
+    function setSelected(root) {
+      if (selectedRoot === root) return;
+      if (selectedRoot) applyEmissive(selectedRoot, 0x000000);
+      selectedRoot = root;
+      if (selectedRoot) applyEmissive(selectedRoot, 0x224466);
+    }
+
+    function getDraggableRoot(object) {
+      let o = object;
+      while (o) {
+        if (o.userData && o.userData.draggable) return o;
+        o = o.parent;
+      }
+      return null;
+    }
+
+    function addDraggable(name, build) {
+      const root = new THREE.Group();
+      root.userData.draggable = true;
+      root.userData.label = name;
+      build(root);
+      root.traverse((child) => {
+        if (child.isMesh) {
+          child.userData.selectRoot = root;
+          selectableMeshes.push(child);
+        }
+      });
+      scene.add(root);
+      return root;
+    }
+
+    const matCube = new THREE.MeshStandardMaterial({ color: 0x6b8cae, roughness: 0.45, metalness: 0.1 });
+    const matChair = new THREE.MeshStandardMaterial({ color: 0x8a6b5c, roughness: 0.55, metalness: 0.05 });
+    const matTable = new THREE.MeshStandardMaterial({ color: 0x5c6b5a, roughness: 0.5, metalness: 0.08 });
+
+    const cubeRoot = addDraggable('cube', (g) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), matCube);
+      mesh.position.y = 0.5;
+      mesh.castShadow = true;
+      g.add(mesh);
+    });
+    const chairRoot = addDraggable('chair', (g) => {
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 1), matChair);
+      seat.position.set(0, 0.55, 0);
+      seat.castShadow = true;
+      g.add(seat);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(1, 0.9, 0.12), matChair);
+      back.position.set(0, 1.0, -0.44);
+      back.castShadow = true;
+      g.add(back);
+      const legGeo = new THREE.BoxGeometry(0.1, 0.5, 0.1);
+      const legY = 0.25;
+      const lx = 0.38;
+      const lz = 0.38;
+      for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
+        const leg = new THREE.Mesh(legGeo, matChair);
+        leg.position.set(sx, legY, sz);
+        leg.castShadow = true;
+        g.add(leg);
+      }
+    });
+    const tableRoot = addDraggable('table', (g) => {
+      const top = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.1, 1.2), matTable);
+      top.position.set(0, 0.75, 0);
+      top.castShadow = true;
+      g.add(top);
+      const legGeo = new THREE.BoxGeometry(0.12, 0.75, 0.12);
+      const ly = 0.375;
+      const lx = 0.95;
+      const lz = 0.45;
+      for (const [sx, sz] of [[-lx, -lz], [lx, -lz], [-lx, lz], [lx, lz]]) {
+        const leg = new THREE.Mesh(legGeo, matTable);
+        leg.position.set(sx, ly, sz);
+        leg.castShadow = true;
+        g.add(leg);
+      }
+    });
+
+    cubeRoot.position.set(-2, 0, 1);
+    chairRoot.position.set(1.5, 0, -1);
+    tableRoot.position.set(0, 0, 2.5);
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
     controls.target.set(0, 0, 0);
+
+    function setPointerFromEvent(event) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    function pickDraggableAtEvent(event) {
+      setPointerFromEvent(event);
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(selectableMeshes, false);
+      if (!hits.length) return null;
+      return getDraggableRoot(hits[0].object);
+    }
+
+    function beginDrag(event, root) {
+      plane.set(new THREE.Vector3(0, 1, 0), -root.position.y);
+      raycaster.setFromCamera(pointer, camera);
+      if (!raycaster.ray.intersectPlane(plane, planeHit)) return;
+      dragging = true;
+      dragPointerId = event.pointerId;
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      dragOffset.copy(root.position).sub(planeHit);
+    }
+
+    function endDrag(event) {
+      if (!dragging || event.pointerId !== dragPointerId) return;
+      dragging = false;
+      dragPointerId = null;
+      controls.enabled = true;
+      try {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    function onPointerDown(event) {
+      if (event.button !== 0) return;
+      setPointerFromEvent(event);
+      const root = pickDraggableAtEvent(event);
+      if (root) {
+        setSelected(root);
+        beginDrag(event, root);
+      } else {
+        setSelected(null);
+      }
+    }
+
+    function onPointerMove(event) {
+      setPointerFromEvent(event);
+      if (!dragging || event.pointerId !== dragPointerId || !selectedRoot) return;
+      raycaster.setFromCamera(pointer, camera);
+      if (raycaster.ray.intersectPlane(plane, planeHit)) {
+        selectedRoot.position.copy(planeHit).add(dragOffset);
+      }
+    }
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerup', endDrag);
+    renderer.domElement.addEventListener('pointercancel', endDrag);
 
     function onResize() {
       camera.aspect = window.innerWidth / window.innerHeight;
