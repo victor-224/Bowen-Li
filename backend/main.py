@@ -1,14 +1,16 @@
-"""Fuse pick-point pixels, Excel equipment rows, and plan scale into final_data (no layout / 3D / UI)."""
+"""Industrial digital twin core: pick fusion + modular engine pipeline (layout, geometry, collision, web payload)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 import cv2
 
 from backend.api import load_equipment_from_excel
+from backend.engines import collision_engine, web_ui
+from backend.engines.scene import build_scene_document
 from backend.pickpoint import PICKPOINT_TAGS, pick_points_on_plan
 
 PLAN_MM = 17500.0
@@ -64,7 +66,20 @@ def build_final_data(
     return final_data
 
 
-def main(plan_path: Path | None = None, excel_path: Path | None = None) -> List[Dict[str, Any]]:
+def run_engine_pipeline(equipment: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """
+    Unified chain (no UI, no frontend):
+
+    equipements -> layout_engine + geometry_engine (via build_scene_document) ->
+    collision_engine -> web_ui
+    """
+    scene = build_scene_document(equipment)
+    scene["collisions"] = collision_engine(scene)
+    return web_ui(scene)
+
+
+def run_pick_fusion(plan_path: Path | None = None, excel_path: Path | None = None) -> List[Dict[str, Any]]:
+    """Interactive pick points + Excel merge (legacy fusion path)."""
     plan = plan_path if plan_path is not None else _default_plan_path()
     image_width, image_height = _plan_image_size(plan)
 
@@ -73,6 +88,14 @@ def main(plan_path: Path | None = None, excel_path: Path | None = None) -> List[
     return build_final_data(pixels, equipment, image_width, image_height)
 
 
+def main(
+    excel_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Run core engine pipeline on equipment loaded from Excel (headless)."""
+    equipment = load_equipment_from_excel(excel_path)
+    return run_engine_pipeline(equipment)
+
+
 if __name__ == "__main__":
-    final_data = main()
-    print(json.dumps(final_data, ensure_ascii=False, indent=2))
+    out = main()
+    print(json.dumps(out, ensure_ascii=False, indent=2))

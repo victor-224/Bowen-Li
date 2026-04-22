@@ -85,49 +85,13 @@ def equipment_dict_to_list(equipment: Dict[str, Dict[str, Any]]) -> List[Dict[st
     return [{"tag": tag, **row} for tag, row in equipment.items()]
 
 
-def _infer_geometry_type(service: Any) -> str:
-    """Map service name to Phase-4 placeholder types: Tank | Compressor | Exchanger."""
-    s = (str(service) if service is not None else "").lower()
-    if "compressor" in s:
-        return "Compressor"
-    if any(k in s for k in ("exchanger", "cooler", "heater", "coalescer")):
-        return "Exchanger"
-    return "Tank"
-
-
-def _grid_position_mm(index: int, cols: int = 5, spacing_mm: float = 12000.0) -> Dict[str, float]:
-    """Deterministic floor positions in mm (Three.js: x, elevation y, plan z)."""
-    col = index % cols
-    row = index // cols
-    return {
-        "x": float(col * spacing_mm),
-        "y": 0.0,
-        "z": float(row * spacing_mm),
-    }
-
-
-def enrich_equipment_for_scene(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Add position_mm and geometry_type for 3D consumers (no layout solver)."""
-    sorted_rows = sorted(rows, key=lambda r: str(r.get("tag", "")))
-    out: List[Dict[str, Any]] = []
-    for i, row in enumerate(sorted_rows):
-        item = dict(row)
-        item["geometry_type"] = _infer_geometry_type(row.get("service"))
-        item["position_mm"] = _grid_position_mm(i)
-        out.append(item)
-    return out
-
-
 def build_scene(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
-    """Unified scene document (2D/3D consumer); walls reserved for future use."""
+    """Unified scene document via core engines (layout + geometry)."""
+    from backend.engines.scene import build_scene_document
+
     if equipment is None:
         equipment = load_equipment_from_excel()
-    base_list = equipment_dict_to_list(equipment)
-    return {
-        "equipment": enrich_equipment_for_scene(base_list),
-        "walls": [],
-        "meta": {"project": "Industrial Digital Twin"},
-    }
+    return build_scene_document(equipment)
 
 
 app = Flask(__name__)

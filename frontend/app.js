@@ -66,22 +66,21 @@ function buildMesh(geometryType, row) {
   const L = num(row.length, 3000);
   const H = num(row.height, 2000);
 
-  let mesh;
+  const gt = geometryType || "cylinder";
 
-  if (geometryType === "Compressor") {
+  if (gt === "Compressor" || gt === "box") {
     const w = d * MM;
     const h = H * MM;
     const dep = L * MM;
     const geom = new THREE.BoxGeometry(w, h, dep);
-    mesh = new THREE.Mesh(geom, makeMaterial(0.2));
-    return mesh;
+    return new THREE.Mesh(geom, makeMaterial(0.2));
   }
 
-  if (geometryType === "Exchanger") {
+  if (gt === "Exchanger" || gt === "cylinder_horizontal") {
     const r = (d / 2) * MM;
     const barrel = (L || H) * MM;
     const geom = new THREE.CylinderGeometry(r, r, barrel, 24);
-    mesh = new THREE.Mesh(geom, makeMaterial(0.5));
+    const mesh = new THREE.Mesh(geom, makeMaterial(0.5));
     mesh.rotation.z = Math.PI / 2;
     return mesh;
   }
@@ -89,8 +88,7 @@ function buildMesh(geometryType, row) {
   const r = (d / 2) * MM;
   const h = (H || L) * MM;
   const geom = new THREE.CylinderGeometry(r, r, h, 24);
-  mesh = new THREE.Mesh(geom, makeMaterial(0.8));
-  return mesh;
+  return new THREE.Mesh(geom, makeMaterial(0.8));
 }
 
 function positionMeters(pm) {
@@ -169,7 +167,7 @@ function populateEquipmentMeshes(equipmentGroup, items) {
   }
 
   for (const row of items) {
-    const gt = row.geometry_type || "Tank";
+    const gt = row.geometry_type || "cylinder";
     const mesh = buildMesh(gt, row);
     const base = positionMeters(row.position_mm);
     mesh.position.set(base.x, 0, base.z);
