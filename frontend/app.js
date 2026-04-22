@@ -318,16 +318,30 @@ function populateEquipmentMeshes(threeCtx, items) {
 const threeCtx = initThree();
 
 async function refreshScene() {
-  const [equipment, sceneDoc] = await Promise.all([
+  const [equipment, pipeline] = await Promise.all([
     fetchJson("/api/equipment"),
-    fetchJson("/api/scene"),
+    fetchJson("/api/pipeline").catch(async () => {
+      // Backward-compatible fallback when unified pipeline endpoint is unavailable.
+      const scene = await fetchJson("/api/scene");
+      return { scene, relations: {}, walls: { walls: [], rooms: [], center: [0, 0] } };
+    }),
   ]);
 
   renderEquipment(equipment);
 
+  const sceneDoc = pipeline.scene || pipeline;
+  const wallsDoc = pipeline.walls || {};
+  const relationsDoc = pipeline.relations || {};
+
   const meta = sceneDoc.meta || sceneDoc?.scene?.meta || {};
   const items = normalizeSceneItems(sceneDoc);
-  sceneMetaEl.textContent = `project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length}`;
+  const wallsCount = Array.isArray(wallsDoc.walls)
+    ? wallsDoc.walls.length
+    : Array.isArray(sceneDoc.walls)
+      ? sceneDoc.walls.length
+      : 0;
+  const relCount = typeof relationsDoc === "object" ? Object.keys(relationsDoc).length : 0;
+  sceneMetaEl.textContent = `project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount}`;
 
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);

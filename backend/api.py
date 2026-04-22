@@ -125,6 +125,30 @@ def build_scene(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[s
     return build_scene_document(equipment)
 
 
+def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Unified digital-twin pipeline output.
+
+    Flow:
+      OCR位置识别 + Excel属性匹配 + 墙体解析 + 关系计算 -> unified payload
+    """
+    if equipment is None:
+        equipment = load_equipment_from_excel()
+    scene_doc = build_scene(equipment)
+    relations = build_relations(scene_doc)
+    walls_doc = {
+        "walls": scene_doc.get("walls", []),
+        "rooms": scene_doc.get("rooms", []),
+        "center": scene_doc.get("center", [0.0, 0.0]),
+    }
+    # Keep the requested unified shape: scene / relations / walls
+    return {
+        "scene": scene_doc.get("equipment", []),
+        "relations": relations,
+        "walls": walls_doc,
+    }
+
+
 app = Flask(__name__)
 CORS(
     app,
@@ -171,6 +195,30 @@ def get_relations() -> Any:
         return jsonify(build_relations(scene))
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/pipeline")
+def get_pipeline() -> Any:
+    try:
+        equipment = load_equipment_from_excel()
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        return jsonify(build_pipeline_output(equipment))
+    except RuntimeError as e:
+        return (
+            jsonify(
+                {
+                    "scene": [],
+                    "relations": {},
+                    "walls": {"walls": [], "rooms": [], "center": [0.0, 0.0]},
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 500
 
@@ -210,7 +258,15 @@ def upload_project_files() -> Any:
 
     print(f"[upload] plan_file: {plan_file.filename} -> {plan_target}")
     print(f"[upload] excel_file: {excel_file.filename} -> {excel_target}")
-    return jsonify({"success": True})
+    try:
+        payload = build_pipeline_output()
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True, **payload})
 
 
 if __name__ == "__main__":
