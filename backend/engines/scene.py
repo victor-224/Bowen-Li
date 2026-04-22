@@ -1,22 +1,28 @@
-"""Assemble scene document from equipment dict + layout positions (canonical shape in scene_spec)."""
+"""Assemble scene document from equipment + detected plan positions (canonical shape in scene_spec)."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional
 
 from backend.api import equipment_dict_to_list
 from backend.engines.geometry import geometry_engine
-from backend.engines.layout import layout_engine
+from backend.locator import detect_positions, pixel_to_mm
 from backend.scene_spec import build_equipment_list, empty_scene
 
 
-def build_scene_document(equipment: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+def build_scene_document(
+    equipment: Mapping[str, Mapping[str, Any]],
+    plan_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """
     equipment (tag -> row) -> scene dict following backend/scene_spec.py.
-
-    Layout positions come from layout_engine; structure and nesting are defined in scene_spec.
+    Position source priority: plan OCR/pickpoint -> mm conversion.
     """
-    positions = layout_engine(equipment)
+    # Restrict locator to known equipment tags so no unrelated OCR text is used.
+    allowed_tags = set(str(t) for t in equipment.keys())
+    pixel_positions = detect_positions(plan_path, allowed_tags=allowed_tags)
+    positions = pixel_to_mm(pixel_positions, plan_path)
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions)
     scene: Dict[str, Any] = empty_scene()

@@ -48,6 +48,13 @@ def _excel_path() -> Path:
     return _repo_root() / _EXCEL_REL
 
 
+def plan_image_path() -> Path:
+    runtime_plan = runtime_plan_path()
+    if runtime_plan.is_file():
+        return runtime_plan
+    return _repo_root() / Path("data") / "plan_hd.png"
+
+
 def _normalize_tag(value: object) -> str:
     """Collapse whitespace so e.g. 'P202 A' matches pickpoint tag 'P202A'."""
     if value is None:
@@ -143,7 +150,10 @@ def get_scene() -> Any:
         return jsonify({"error": str(e)}), 404
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify(build_scene(equipment))
+    try:
+        return jsonify(build_scene(equipment))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.post("/api/upload")
