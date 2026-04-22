@@ -41,6 +41,12 @@
     #equipment-list { list-style: none; padding: 0; max-width: 48rem; }
     #equipment-list li { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
     #equipment-list .tag { font-weight: 600; margin-right: 0.5rem; }
+    #scene-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 0.9rem;
+      align-items: start;
+    }
     #three-container {
       width: 100%;
       height: min(70vh, 560px);
@@ -53,7 +59,27 @@
       overflow: hidden;
     }
     #three-container canvas { display: block; width: 100%; height: 100%; }
+    #info-panel {
+      margin-top: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fcfcfc;
+      padding: 0.75rem;
+      font-size: 0.9rem;
+    }
+    #info-panel h3 {
+      margin: 0 0 0.6rem;
+      font-size: 0.96rem;
+    }
+    #info-panel .kv { margin: 0.28rem 0; }
+    #info-panel .label { color: #666; display: inline-block; width: 4.5rem; }
+    #info-panel .value { font-weight: 500; }
     .error { color: #a00; }
+    @media (max-width: 980px) {
+      #scene-layout {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
@@ -81,7 +107,16 @@
 
   <h2>Scene (from /api/scene)</h2>
   <p id="scene-meta"></p>
-  <div id="three-container"></div>
+  <div id="scene-layout">
+    <div id="three-container"></div>
+    <aside id="info-panel">
+      <h3>设备信息</h3>
+      <div class="kv"><span class="label">tag</span><span class="value" id="info-tag">-</span></div>
+      <div class="kv"><span class="label">service</span><span class="value" id="info-service">-</span></div>
+      <div class="kv"><span class="label">尺寸</span><span class="value" id="info-size">-</span></div>
+      <div class="kv"><span class="label">坐标</span><span class="value" id="info-pos">-</span></div>
+    </aside>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>
