@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+data/runtime/positions_cache.json
+data/runtime/uploaded_layout.pdf
+data/runtime/uploaded_layout.png

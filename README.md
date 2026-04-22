@@ -282,11 +282,11 @@ python3 -m http.server 3000
 - 关系引擎 / Moteur de relations
 - Layout Graph 基础结构
 
-### Phase B（进行中 / En cours）
-- OCR稳定性增强（缓存 + 多模型投票）
-- Zone语义细分（process_unit / utility / storage / corridor）
-- 关系边置信度评分
-- 更强工艺流推理（upstream/downstream）
+### Phase B（已完成 / Terminé）
+- OCR稳定性增强（缓存 + 多模型投票） / Robustesse OCR (cache + vote multi-modèles)
+- Zone语义细分（process_unit / utility / storage / corridor） / Raffinement sémantique des zones
+- 关系边置信度评分 / Scoring de confiance des arêtes de relation
+- 更强工艺流推理（upstream/downstream） / Inférence de flux procédé renforcée
 
 ### Phase C（规划中 / Planifié）
 - P&ID 联动 / Intégration P&ID
