@@ -17,9 +17,36 @@
     h1 { font-size: 1.25rem; }
     h2 { font-size: 1rem; margin-top: 1.25rem; }
     #status { color: #555; font-size: 0.9rem; }
+    #upload-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.75rem;
+      align-items: end;
+      max-width: 58rem;
+      margin: 0.75rem 0 1rem;
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fafafa;
+    }
+    #upload-panel label { display: block; font-size: 0.9rem; margin-bottom: 0.2rem; }
+    #upload-panel input, #upload-panel button {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.4rem;
+      font-size: 0.92rem;
+    }
+    #upload-feedback { font-size: 0.9rem; color: #2b6f2b; }
+    #loaded-filenames { font-size: 0.88rem; color: #444; margin-top: 0.4rem; }
     #equipment-list { list-style: none; padding: 0; max-width: 48rem; }
     #equipment-list li { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
     #equipment-list .tag { font-weight: 600; margin-right: 0.5rem; }
+    #scene-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      gap: 0.9rem;
+      align-items: start;
+    }
     #three-container {
       width: 100%;
       height: min(70vh, 560px);
@@ -32,19 +59,76 @@
       overflow: hidden;
     }
     #three-container canvas { display: block; width: 100%; height: 100%; }
+    #info-panel {
+      margin-top: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fcfcfc;
+      padding: 0.75rem;
+      font-size: 0.9rem;
+    }
+    #info-panel h3 {
+      margin: 0 0 0.6rem;
+      font-size: 0.96rem;
+    }
+    #info-panel .kv { margin: 0.28rem 0; }
+    #info-panel .label { color: #666; display: inline-block; width: 4.5rem; }
+    #info-panel .value { font-weight: 500; }
     .error { color: #a00; }
+    @media (max-width: 980px) {
+      #scene-layout {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
   <h1>Industrial Digital Twin</h1>
   <p id="status">Loading…</p>
+  <div id="upload-panel">
+    <div>
+      <label for="layout-file-input">选择图纸 PDF/PNG</label>
+      <input id="layout-file-input" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+    </div>
+    <div>
+      <label for="excel-file-input">选择 Excel 文件</label>
+      <input id="excel-file-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </div>
+    <div>
+      <label for="reference-file-input">选择参考PDF</label>
+      <input id="reference-file-input" type="file" accept=".pdf,application/pdf">
+    </div>
+    <div>
+      <label for="gad-file-input">选择GAD PDF</label>
+      <input id="gad-file-input" type="file" accept=".pdf,application/pdf">
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <button id="load-project-btn" type="button">加载项目</button>
+    </div>
+  </div>
+  <p id="upload-feedback"></p>
+  <p id="loaded-filenames">当前已加载：平面图（未选择），Excel（未选择）</p>
 
   <h2>Equipment (from /api/equipment)</h2>
   <ul id="equipment-list"></ul>
 
-  <h2>Scene (from /api/scene)</h2>
+  <h2>Scene / Graph (from /api/pipeline + /api/layout_graph)</h2>
   <p id="scene-meta"></p>
-  <div id="three-container"></div>
+  <div id="scene-layout">
+    <div id="three-container"></div>
+    <aside id="info-panel">
+      <h3>设备信息</h3>
+      <div class="kv"><span class="label">tag</span><span class="value" id="info-tag">-</span></div>
+      <div class="kv"><span class="label">service</span><span class="value" id="info-service">-</span></div>
+      <div class="kv"><span class="label">尺寸</span><span class="value" id="info-size">-</span></div>
+      <div class="kv"><span class="label">坐标</span><span class="value" id="info-pos">-</span></div>
+      <div class="kv"><span class="label">zone</span><span class="value" id="info-zone">-</span></div>
+      <div class="kv"><span class="label">upstream</span><span class="value" id="info-upstream">-</span></div>
+      <div class="kv"><span class="label">downstream</span><span class="value" id="info-downstream">-</span></div>
+      <div class="kv"><span class="label">nearest</span><span class="value" id="info-nearest">-</span></div>
+    </aside>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>
