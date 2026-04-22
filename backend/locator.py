@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from pathlib import Path
 from typing import Dict, Iterable, Tuple
 
@@ -29,6 +30,10 @@ def default_plan_path() -> Path:
     if runtime_plan.is_file():
         return runtime_plan
     return default_plan
+
+
+def _cache_path() -> Path:
+    return _repo_root() / "data" / "runtime" / "positions_cache.json"
 
 
 def _normalize_tag(text: str) -> str:
@@ -98,6 +103,68 @@ def _detect_with_pdf_text_layer(pdf_path: Path) -> Dict[str, Dict[str, object]]:
     return out
 
 
+def _merge_votes(
+    a: Dict[str, Dict[str, object]],
+    b: Dict[str, Dict[str, object]],
+) -> Dict[str, Dict[str, object]]:
+    """
+    Multi-model vote merge:
+    - If same tag appears in both detectors, average position and increase confidence.
+    - Otherwise keep single-source candidate.
+    """
+    out: Dict[str, Dict[str, object]] = {}
+    tags = set(a.keys()) | set(b.keys())
+    for t in tags:
+        va = a.get(t)
+        vb = b.get(t)
+        if va and vb:
+            xa, ya = va["pos"]  # type: ignore[index]
+            xb, yb = vb["pos"]  # type: ignore[index]
+            ca = float(va.get("confidence", 0.0))
+            cb = float(vb.get("confidence", 0.0))
+            out[t] = {
+                "pos": [int((float(xa) + float(xb)) / 2.0), int((float(ya) + float(yb)) / 2.0)],
+                "confidence": min(1.0, (ca + cb) / 2.0 + 0.1),
+                "source": "ocr_vote",
+            }
+        elif va:
+            out[t] = dict(va)
+        elif vb:
+            out[t] = dict(vb)
+    return out
+
+
+def _load_cached_positions() -> Dict[str, Dict[str, object]]:
+    p = _cache_path()
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out: Dict[str, Dict[str, object]] = {}
+    if isinstance(raw, dict):
+        for tag, v in raw.items():
+            if isinstance(v, dict) and "pos" in v:
+                pos = v.get("pos")
+                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                    out[str(tag)] = {
+                        "pos": [int(pos[0]), int(pos[1])],
+                        "confidence": float(v.get("confidence", 0.25)),
+                        "source": "cache",
+                    }
+    return out
+
+
+def _save_cached_positions(positions: Dict[str, Dict[str, object]]) -> None:
+    p = _cache_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(json.dumps(positions, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _pickpoint_available() -> bool:
     # Cloud/headless envs often cannot open OpenCV windows.
     # If DISPLAY is absent, skip interactive fallback.
@@ -152,9 +219,21 @@ def detect_positions_with_confidence(
 
     out: Dict[str, Dict[str, object]]
     try:
-        out = _detect_with_easyocr(p)
+        ocr_out = _detect_with_easyocr(p)
     except Exception:
-        out = {}
+        ocr_out = {}
+
+    pdf_out: Dict[str, Dict[str, object]] = {}
+    pdf_path = pdf_source_path
+    if pdf_path is None and _is_pdf(p):
+        pdf_path = p
+    if pdf_path is not None and pdf_path.is_file():
+        try:
+            pdf_out = _detect_with_pdf_text_layer(pdf_path)
+        except Exception:
+            pdf_out = {}
+
+    out = _merge_votes(ocr_out, pdf_out)
 
     allowed = set(allowed_tags) if allowed_tags is not None else None
     if allowed is not None:
@@ -163,22 +242,6 @@ def detect_positions_with_confidence(
         if allowed is not None:
             return _estimate_missing_positions(out, allowed)
         return out
-
-    # fallback 2: PDF text layer
-    pdf_path = pdf_source_path
-    if pdf_path is None and _is_pdf(p):
-        pdf_path = p
-    if pdf_path is not None and pdf_path.is_file():
-        try:
-            out = _detect_with_pdf_text_layer(pdf_path)
-        except Exception:
-            out = {}
-        if allowed is not None:
-            out = {k: v for k, v in out.items() if k in allowed}
-        if out:
-            if allowed is not None:
-                return _estimate_missing_positions(out, allowed)
-            return out
 
     # fallback 1: manual pickpoint (only if GUI available)
     if _pickpoint_available():
@@ -191,14 +254,26 @@ def detect_positions_with_confidence(
             if allowed is not None:
                 out = {k: v for k, v in out.items() if k in allowed}
             if allowed is not None:
-                return _estimate_missing_positions(out, allowed)
+                out = _estimate_missing_positions(out, allowed)
+            _save_cached_positions(out)
             return out
         except Exception:
             pass
 
+    # fallback 2: cache reuse
+    cached = _load_cached_positions()
+    if allowed is not None:
+        cached = {k: v for k, v in cached.items() if k in allowed}
+    if cached:
+        if allowed is not None:
+            return _estimate_missing_positions(cached, allowed)
+        return cached
+
     # fallback 3: clustering estimate only if allowed tags known
     if allowed is not None:
-        return _estimate_missing_positions({}, allowed)
+        estimated = _estimate_missing_positions({}, allowed)
+        _save_cached_positions(estimated)
+        return estimated
     raise RuntimeError("No positions detected and no fallback available.")
 
 

@@ -18,13 +18,13 @@ def _xy_from_node(n: Mapping[str, Any]) -> Tuple[float, float]:
 
 def _service_zone_type(service: str) -> str:
     s = (service or "").lower()
-    if any(k in s for k in ("utility", "steam", "air", "water")):
+    if any(k in s for k in ("utility", "steam", "air", "water", "nitrogen", "instrument")):
         return "utility_area"
-    if any(k in s for k in ("storage", "tank", "drum")):
+    if any(k in s for k in ("storage", "tank", "drum", "buffer")):
         return "storage_area"
-    if any(k in s for k in ("rack", "pipe")):
+    if any(k in s for k in ("rack", "pipe", "header", "manifold")):
         return "pipe_rack_zone"
-    if any(k in s for k in ("maintenance", "corridor")):
+    if any(k in s for k in ("maintenance", "corridor", "access", "walkway")):
         return "maintenance_corridor"
     return "process_unit"
 
@@ -111,6 +111,16 @@ def _zone_from_cluster(zone_id: str, cluster: List[Dict[str, Any]]) -> Dict[str,
     }
 
 
+def _edge_confidence(
+    source: Dict[str, Any],
+    target: Dict[str, Any],
+    base: float,
+) -> float:
+    ca = float(source.get("confidence", 0.5))
+    cb = float(target.get("confidence", 0.5))
+    return round(max(0.05, min(1.0, base * ((ca + cb) / 2.0))), 3)
+
+
 def _build_space_edges(nodes: List[Dict[str, Any]], relations: Mapping[str, Any], zone_by_tag: Mapping[str, str]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     by_tag = {str(n.get("tag")): n for n in nodes if n.get("tag")}
@@ -127,21 +137,44 @@ def _build_space_edges(nodes: List[Dict[str, Any]], relations: Mapping[str, Any]
                         "target": b,
                         "type": "distance",
                         "value": float(dist_m),
+                        "confidence": _edge_confidence(by_tag[a], by_tag[b], 0.9),
                     }
                 )
             lkey = f"{a}_left_of_{b}"
             if relations.get(lkey) is True:
-                out.append({"source": a, "target": b, "type": "left_of"})
+                out.append(
+                    {
+                        "source": a,
+                        "target": b,
+                        "type": "left_of",
+                        "confidence": _edge_confidence(by_tag[a], by_tag[b], 0.85),
+                    }
+                )
             rkey = f"{b}_left_of_{a}"
             if relations.get(rkey) is True:
-                out.append({"source": b, "target": a, "type": "left_of"})
+                out.append(
+                    {
+                        "source": b,
+                        "target": a,
+                        "type": "left_of",
+                        "confidence": _edge_confidence(by_tag[a], by_tag[b], 0.85),
+                    }
+                )
             if zone_by_tag.get(a) and zone_by_tag.get(a) == zone_by_tag.get(b):
-                out.append({"source": a, "target": b, "type": "in_same_zone", "zone_id": zone_by_tag[a]})
+                out.append(
+                    {
+                        "source": a,
+                        "target": b,
+                        "type": "in_same_zone",
+                        "zone_id": zone_by_tag[a],
+                        "confidence": _edge_confidence(by_tag[a], by_tag[b], 0.95),
+                    }
+                )
     return out
 
 
 def _build_process_edges(nodes: List[Dict[str, Any]], zone_by_tag: Mapping[str, str]) -> List[Dict[str, Any]]:
-    """Basic process flow inference by X ordering within each zone."""
+    """Process flow inference by role + X ordering within each zone."""
     zone_nodes: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for n in nodes:
         tag = str(n.get("tag", ""))
@@ -151,14 +184,34 @@ def _build_process_edges(nodes: List[Dict[str, Any]], zone_by_tag: Mapping[str, 
 
     edges: List[Dict[str, Any]] = []
     for zid, items in zone_nodes.items():
-        ordered = sorted(items, key=lambda n: _xy_from_node(n)[0])
+        role_rank = {
+            "feed": 0,
+            "transfer": 1,
+            "compression": 2,
+            "thermal_exchange": 3,
+            "storage": 4,
+            "process": 5,
+        }
+        ordered = sorted(
+            items,
+            key=lambda n: (role_rank.get(str(n.get("process_role", "process")), 99), _xy_from_node(n)[0]),
+        )
         for i in range(len(ordered) - 1):
             a = str(ordered[i].get("tag"))
             b = str(ordered[i + 1].get("tag"))
             if a and b:
-                edges.append({"source": a, "target": b, "type": "upstream"})
-                edges.append({"source": b, "target": a, "type": "downstream"})
-                edges.append({"source": a, "target": b, "type": "connected_process", "zone_id": zid})
+                base_conf = _edge_confidence(ordered[i], ordered[i + 1], 0.8)
+                edges.append({"source": a, "target": b, "type": "upstream", "confidence": base_conf})
+                edges.append({"source": b, "target": a, "type": "downstream", "confidence": base_conf})
+                edges.append(
+                    {
+                        "source": a,
+                        "target": b,
+                        "type": "connected_process",
+                        "zone_id": zid,
+                        "confidence": base_conf,
+                    }
+                )
     return edges
 
 

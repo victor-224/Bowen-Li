@@ -58,6 +58,15 @@ def _pairs(equipment: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], Dict[s
     return out
 
 
+def _edge_confidence(a: Dict[str, Any], b: Dict[str, Any], dist_m: float) -> float:
+    ca = float(a.get("confidence", a.get("position_confidence", 0.6)) or 0.6)
+    cb = float(b.get("confidence", b.get("position_confidence", 0.6)) or 0.6)
+    base = max(0.2, min(1.0, (ca + cb) / 2.0))
+    # nearer pairs usually have more reliable relation meaning
+    dist_factor = max(0.5, min(1.0, 3.0 / max(dist_m, 0.3)))
+    return round(max(0.1, min(1.0, base * dist_factor)), 3)
+
+
 def _is_parallel(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
     """
     Basic parallel rule:
@@ -140,6 +149,8 @@ def build_relations(scene: Dict[str, Any]) -> Dict[str, Any]:
 
         dist_m = math.hypot(ax - bx, ay - by) / 1000.0
         relations[f"distance_{ta}_{tb}"] = round(dist_m, 3)
+        relations[f"edge_confidence_{ta}_{tb}"] = _edge_confidence(a, b, dist_m)
+        relations[f"edge_confidence_{tb}_{ta}"] = relations[f"edge_confidence_{ta}_{tb}"]
 
         is_parallel = _is_parallel(a, b)
         relations[f"{ta}_parallel_{tb}"] = is_parallel
@@ -163,11 +174,26 @@ def build_relations(scene: Dict[str, Any]) -> Dict[str, Any]:
         relations[f"{ta}_connected_process_{tb}"] = connected
         relations[f"{tb}_connected_process_{ta}"] = connected
 
-        # Directional process hint: lower y as upstream baseline.
-        relations[f"{ta}_upstream_{tb}"] = ay < by
-        relations[f"{tb}_upstream_{ta}"] = by < ay
-        relations[f"{ta}_downstream_{tb}"] = ay > by
-        relations[f"{tb}_downstream_{ta}"] = by > ay
+        # Stronger process-flow hint:
+        # 1) if one is pump/compressor and the other is tank/exchanger, pump/compressor is upstream
+        sa_type = str(a.get("equipment_type", "")).lower()
+        sb_type = str(b.get("equipment_type", "")).lower()
+        if ("pump" in sa_type or "compressor" in sa_type) and ("tank" in sb_type or "exchanger" in sb_type):
+            relations[f"{ta}_upstream_{tb}"] = True
+            relations[f"{tb}_upstream_{ta}"] = False
+            relations[f"{ta}_downstream_{tb}"] = False
+            relations[f"{tb}_downstream_{ta}"] = True
+        elif ("pump" in sb_type or "compressor" in sb_type) and ("tank" in sa_type or "exchanger" in sa_type):
+            relations[f"{ta}_upstream_{tb}"] = False
+            relations[f"{tb}_upstream_{ta}"] = True
+            relations[f"{ta}_downstream_{tb}"] = True
+            relations[f"{tb}_downstream_{ta}"] = False
+        else:
+            # 2) fallback: lower y is upstream baseline
+            relations[f"{ta}_upstream_{tb}"] = ay < by
+            relations[f"{tb}_upstream_{ta}"] = by < ay
+            relations[f"{ta}_downstream_{tb}"] = ay > by
+            relations[f"{tb}_downstream_{ta}"] = by > ay
 
     return relations
 
