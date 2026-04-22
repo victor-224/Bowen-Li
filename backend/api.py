@@ -9,6 +9,7 @@ import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from backend.relations import build_relations
+from backend.walls import parse_walls_and_rooms
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -168,6 +169,18 @@ def get_relations() -> Any:
     try:
         scene = build_scene(equipment)
         return jsonify(build_relations(scene))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/walls")
+def get_walls() -> Any:
+    try:
+        return jsonify(parse_walls_and_rooms(plan_image_path()))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
 

@@ -15,6 +15,40 @@ def _xy_mm(item: Dict[str, Any]) -> Tuple[float, float]:
     return 0.0, 0.0
 
 
+def _wall_distance_mm(x: float, y: float, walls: List[Dict[str, Any]]) -> float:
+    """
+    Approximate min distance to any wall segment endpoint-projected distance in mm.
+    Falls back to inf when walls are unavailable.
+    """
+    if not walls:
+        return float("inf")
+    best = float("inf")
+    px, py = x, y
+    for w in walls:
+        if not isinstance(w, dict):
+            continue
+        p1 = w.get("p1")
+        p2 = w.get("p2")
+        if not (isinstance(p1, (list, tuple)) and isinstance(p2, (list, tuple)) and len(p1) >= 2 and len(p2) >= 2):
+            continue
+        x1, y1 = float(p1[0]), float(p1[1])
+        x2, y2 = float(p2[0]), float(p2[1])
+        dx = x2 - x1
+        dy = y2 - y1
+        denom = dx * dx + dy * dy
+        if denom <= 0:
+            dist = math.hypot(px - x1, py - y1)
+        else:
+            t = ((px - x1) * dx + (py - y1) * dy) / denom
+            t = max(0.0, min(1.0, t))
+            qx = x1 + t * dx
+            qy = y1 + t * dy
+            dist = math.hypot(px - qx, py - qy)
+        if dist < best:
+            best = dist
+    return best
+
+
 def _pairs(equipment: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
     out: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     n = len(equipment)
@@ -61,15 +95,37 @@ def build_relations(scene: Dict[str, Any]) -> Dict[str, Any]:
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     wall_margin_mm = 2000.0
+    walls = scene.get("walls")
+    rooms = scene.get("rooms")
+    if not isinstance(walls, list):
+        walls = []
+    if not isinstance(rooms, list):
+        rooms = []
 
     for tag, (x, y) in coords.items():
-        near = (
-            (x - min_x) <= wall_margin_mm
-            or (max_x - x) <= wall_margin_mm
-            or (y - min_y) <= wall_margin_mm
-            or (max_y - y) <= wall_margin_mm
-        )
+        wall_dist = _wall_distance_mm(x, y, walls)
+        if math.isfinite(wall_dist):
+            near = wall_dist <= wall_margin_mm
+        else:
+            near = (
+                (x - min_x) <= wall_margin_mm
+                or (max_x - x) <= wall_margin_mm
+                or (y - min_y) <= wall_margin_mm
+                or (max_y - y) <= wall_margin_mm
+            )
         relations[f"{tag}_near_wall"] = bool(near)
+        in_center = False
+        for room in rooms:
+            if not isinstance(room, dict):
+                continue
+            c = room.get("center")
+            if not (isinstance(c, (list, tuple)) and len(c) >= 2):
+                continue
+            cx, cy = float(c[0]), float(c[1])
+            if math.hypot(x - cx, y - cy) <= wall_margin_mm:
+                in_center = True
+                break
+        relations[f"{tag}_in_room_center"] = in_center
 
     for a, b in _pairs(valid_eq):
         ta = str(a["tag"])
