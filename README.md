@@ -1,78 +1,110 @@
-# Industrial Equipment Digital Twin System  
-# 工业设备数字孪生系统
+# 🌐 Industrial Digital Twin System  
+# 工业数字孪生系统
+
+==================================================
+
+## 📌 One-line Overview
+
+将工业二维图纸（PDF/PNG）+ Excel设备数据  
+自动转换为可交互3D工业数字孪生系统（AI驱动）。
 
 ---
 
-## 📌 One-line Description / 一句话介绍
+# 🧠 Industrial AI · Spatial Computing · Graph Engineering System
 
-🇨🇳  
-将二维工业图纸 + Excel设备清单 + PDF技术资料  
-自动转换为可交互3D工业数字孪生场景。
+==================================================
 
-🇫🇷  
-Transformation automatique de plans industriels 2D + fichiers Excel + documents PDF  
-en une scène 3D interactive de jumeau numérique.
-
----
-
-## 🧭 System Flow Diagram / 系统流程图
-
-```mermaid
-flowchart TD
-  dataInput[DataFolderFiles] --> fileClassifier[FileClassifier]
-  fileClassifier --> pdfLoader[PdfLoader]
-  fileClassifier --> excelLoader[ExcelLoader]
-  pdfLoader --> locator[LocatorOCR]
-  locator --> sceneBuilder[SceneBuilder]
-  excelLoader --> sceneBuilder
-  sceneBuilder --> wallsEngine[WallsEngine]
-  sceneBuilder --> relationsEngine[RelationsEngine]
-  sceneBuilder --> layoutGraph[LayoutGraphBuilder]
-  wallsEngine --> pipelineApi[PipelineAPI]
-  relationsEngine --> pipelineApi
-  layoutGraph --> pipelineApi
-  pipelineApi --> frontend[ThreeJSFrontend]
-```
-
----
-
-## 🏛️ Module Architecture / 模块架构图
+## 🧭 System Pipeline / 工业数据流（Mermaid）
 
 ```mermaid
 flowchart LR
+  dataFolder["📁 data folder"] --> fileClassifier["🔍 Auto File Classifier"]
+  fileClassifier --> pdfParser["📄 PDF Layout Parser"]
+  fileClassifier --> excelEngine["📊 Excel Semantic Engine"]
+  pdfParser --> ocrDetect["👁 OCR Spatial Detection"]
+  excelEngine --> semanticMap["🧠 Equipment Semantic Mapping"]
+  ocrDetect --> sceneBuilder["🏗 Scene Builder"]
+  semanticMap --> sceneBuilder
+  sceneBuilder --> layoutGraph["🧩 Layout Graph Engine"]
+  layoutGraph --> constraintsLayer["⚙️ Constraint & Topology Layer"]
+  constraintsLayer --> renderer["🎮 Three.js 3D Renderer"]
+  renderer --> dashboard["🌐 Web Visualization Dashboard"]
+```
+
+==================================================
+
+## 🏗 System Architecture / 系统架构（Mermaid）
+
+```mermaid
+flowchart TB
   subgraph backend [Backend]
-    api[backend.api]
-    classifier[backend.file_classifier]
-    loader[backend.pdf_loader]
-    locatorM[backend.locator]
-    wallsM[backend.walls]
-    relationsM[backend.relations]
-    graphM[backend.layout_graph]
-    sceneM[backend.engines.scene]
+    apiServer["API Server"]
+    fileClassifier["File Classifier"]
+    pdfOcr["PDF + OCR Engine"]
+    excelParser["Excel Parser"]
+    sceneBuilder["Scene Builder"]
+  end
+
+  subgraph aiLayer [AI Layer]
+    spatialReasoning["Spatial Reasoning Engine"]
+    graphGenerator["Layout Graph Generator"]
+    topologySolver["Topology Constraint Solver"]
+    pidFuture["P&ID Module (Future)"]
   end
 
   subgraph frontend [Frontend]
-    html[frontend.index]
-    js[frontend.app]
+    threeRenderer["Three.js Renderer"]
+    graphUi["Graph Visualization UI"]
+    dashboard["Interactive Dashboard"]
   end
 
-  subgraph aiPipeline [AI_Pipeline]
-    ocr[OCR]
-    semantic[SemanticFusion]
-  end
+  apiServer --> fileClassifier --> pdfOcr --> excelParser --> sceneBuilder
+  sceneBuilder --> spatialReasoning --> graphGenerator --> topologySolver --> pidFuture
+  pidFuture --> threeRenderer --> graphUi --> dashboard
+```
 
-  classifier --> loader
-  loader --> ocr
-  ocr --> locatorM
-  locatorM --> semantic
-  semantic --> sceneM
-  wallsM --> sceneM
-  relationsM --> graphM
-  sceneM --> graphM
-  graphM --> api
-  api --> js
-  html --> js
-  js --> html
+==================================================
+
+## 📡 API Overview（UI卡片风格）
+
+```text
+┌────────────────────────────────────┐
+│ GET /api/pipeline                  │
+├────────────────────────────────────┤
+│ Full digital twin output           │
+│ Scene + Graph + Constraints        │
+└────────────────────────────────────┘
+```
+
+```text
+┌────────────────────────────────────┐
+│ GET /api/layout_graph              │
+├────────────────────────────────────┤
+│ Semantic graph (nodes/edges/zones)│
+└────────────────────────────────────┘
+```
+
+```text
+┌────────────────────────────────────┐
+│ POST /api/upload                   │
+├────────────────────────────────────┤
+│ Upload PDF/Excel → Auto pipeline   │
+└────────────────────────────────────┘
+```
+
+==================================================
+
+## 🚀 GitHub Banner（封面强化）
+
+```text
+███████████████████████████████████
+INDUSTRIAL DIGITAL TWIN SYSTEM
+███████████████████████████████████
+
+✔ Auto Layout Understanding
+✔ OCR Spatial Intelligence
+✔ Semantic Graph Engine
+✔ 3D Industrial Reconstruction
 ```
 
 ---
