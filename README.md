@@ -206,6 +206,13 @@ python3 -m http.server 3000
 - `GET /api/layout_graph` — 🇨🇳 语义图结构 / 🇫🇷 structure de graphe sémantique
 - `GET /api/pipeline` — 🇨🇳 统一输出 / 🇫🇷 sortie unifiée
 
+### Phase C 接口 / API Phase C / Phase C APIs
+
+- `GET /api/pid_links` — 🇨🇳 P&ID 关联结果 / 🇫🇷 liens d’intégration P&ID
+- `GET /api/topology` — 🇨🇳 拓扑约束诊断与建议 / 🇫🇷 diagnostic et recommandations topologiques
+- `GET /api/plants` — 🇨🇳 多工厂版本清单 / 🇫🇷 registre de versions multi-usines
+- `GET /api/observability` — 🇨🇳 指标追踪审计 / 🇫🇷 métriques, traces et audit
+
 ---
 
 ## 🧩 API Response Cards / Cartes de réponse API / API响应示例
@@ -237,6 +244,13 @@ python3 -m http.server 3000
     "edges": [],
     "zones": [],
     "constraints": []
+  },
+  "phase_c": {
+    "pid_links": {},
+    "topology_optimization": {},
+    "multiplant_version": {
+      "version_id": "v1"
+    }
   }
 }
 ```
@@ -288,11 +302,11 @@ python3 -m http.server 3000
 - 关系边置信度评分 / Scoring de confiance des arêtes de relation
 - 更强工艺流推理（upstream/downstream） / Inférence de flux procédé renforcée
 
-### Phase C（规划中 / Planifié）
-- P&ID 联动 / Intégration P&ID
-- 拓扑约束优化 / Optimisation topologique
-- 多工厂版本管理 / Versioning multi-usines
-- Observability（metrics/tracing/audit）
+### Phase C（基础版已实现 / Base implémentée）
+- P&ID 联动（PDF 参考文档标签提取 + 工艺边映射）/ Intégration P&ID (extraction tags PDF + mapping des arêtes procédé)
+- 拓扑约束优化（安全间距违规检测 + 负载分区诊断）/ Optimisation topologique (détection des violations d’espacement + diagnostic de surcharge des zones)
+- 多工厂版本管理（运行时快照注册与版本列表）/ Versioning multi-usines (enregistrement des snapshots runtime + liste des versions)
+- Observability（metrics/tracing/audit 基础链路）/ Observabilité (chaîne de base metrics/tracing/audit)
 
 ---
 

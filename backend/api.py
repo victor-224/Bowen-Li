@@ -13,6 +13,10 @@ from backend.pdf_loader import first_page_to_layout_png
 from backend.relations import build_relations
 from backend.walls import parse_walls_and_rooms
 from backend.layout_graph import build_layout_graph
+from backend.multiplant_registry import list_plants, register_snapshot
+from backend.observability import audit_event, finish_trace, get_observability, observe_operation, start_trace
+from backend.pid_integration import build_pid_links
+from backend.topology_optimizer import optimize_topology
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -48,6 +52,16 @@ def runtime_excel_path() -> Path:
 
 def data_dir_path() -> Path:
     return _repo_root() / "data"
+
+
+def _path_like_to_json(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    return None
 
 
 def _excel_path() -> Path:
@@ -151,23 +165,59 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
     Flow:
       OCR位置识别 + Excel属性匹配 + 墙体解析 + 关系计算 -> unified payload
     """
-    if equipment is None:
-        equipment = load_equipment_from_excel()
-    scene_doc = build_scene(equipment)
-    relations = build_relations(scene_doc)
-    layout_graph = build_layout_graph(scene_doc, scene_doc.get("walls", []), relations, equipment)
-    walls_doc = {
-        "walls": scene_doc.get("walls", []),
-        "rooms": scene_doc.get("rooms", []),
-        "center": scene_doc.get("center", [0.0, 0.0]),
-    }
-    # Keep the requested unified shape: scene / relations / walls
-    return {
-        "scene": scene_doc.get("equipment", []),
-        "relations": relations,
-        "walls": walls_doc,
-        "layout_graph": layout_graph,
-    }
+    trace = start_trace("build_pipeline")
+    status = "ok"
+    try:
+        if equipment is None:
+            equipment = load_equipment_from_excel()
+        scene_doc = build_scene(equipment)
+        relations = build_relations(scene_doc)
+        layout_graph = build_layout_graph(scene_doc, scene_doc.get("walls", []), relations, equipment)
+        walls_doc = {
+            "walls": scene_doc.get("walls", []),
+            "rooms": scene_doc.get("rooms", []),
+            "center": scene_doc.get("center", [0.0, 0.0]),
+        }
+        data_dir = data_dir_path()
+        runtime_dir = runtime_dir_path()
+        pid_links = build_pid_links(layout_graph, data_dir)
+        topology = optimize_topology(layout_graph)
+        source_files = classify_files(data_dir)
+        plant_version = register_snapshot(
+            runtime_dir,
+            plant_id="default-plant",
+            payload={
+                "scene": scene_doc.get("equipment", []),
+                "layout_graph": layout_graph,
+            },
+            source_files=source_files,
+        )
+        audit_event(
+            runtime_dir,
+            "pipeline_built",
+            {
+                "scene_count": len(scene_doc.get("equipment", [])),
+                "zone_count": len(layout_graph.get("zones", [])),
+                "version_id": plant_version.get("version_id"),
+            },
+        )
+        return {
+            "scene": scene_doc.get("equipment", []),
+            "relations": relations,
+            "walls": walls_doc,
+            "layout_graph": layout_graph,
+            "phase_c": {
+                "pid_links": pid_links,
+                "topology_optimization": topology,
+                "multiplant_version": plant_version,
+            },
+        }
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        trace_result = finish_trace(trace, status=status)
+        observe_operation(runtime_dir_path(), trace_result)
 
 
 app = Flask(__name__)
@@ -221,14 +271,7 @@ def get_relations() -> Any:
 @app.get("/api/files")
 def get_files() -> Any:
     classified = classify_files(data_dir_path())
-    out: Dict[str, Any] = {}
-    for k, v in classified.items():
-        if isinstance(v, Path):
-            out[k] = str(v)
-        elif isinstance(v, list):
-            out[k] = [str(x) for x in v]
-        else:
-            out[k] = None
+    out: Dict[str, Any] = {k: _path_like_to_json(v) for k, v in classified.items()}
     return jsonify(out)
 
 
@@ -237,14 +280,7 @@ def get_status() -> Any:
     classified = classify_files(data_dir_path())
     required = {"layout", "excel"}
     missing = sorted(list(required - set(k for k, v in classified.items() if v)))
-    files_out: Dict[str, Any] = {}
-    for k, v in classified.items():
-        if isinstance(v, Path):
-            files_out[k] = str(v)
-        elif isinstance(v, list):
-            files_out[k] = [str(x) for x in v]
-        else:
-            files_out[k] = None
+    files_out: Dict[str, Any] = {k: _path_like_to_json(v) for k, v in classified.items()}
     return jsonify(
         {
             "ready": len(missing) == 0,
@@ -297,6 +333,34 @@ def get_layout_graph() -> Any:
         return jsonify({"error": str(e)}), 500
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/pid_links")
+def get_pid_links() -> Any:
+    try:
+        payload = build_pipeline_output()
+        return jsonify(payload.get("phase_c", {}).get("pid_links", {}))
+    except (RuntimeError, FileNotFoundError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/topology")
+def get_topology() -> Any:
+    try:
+        payload = build_pipeline_output()
+        return jsonify(payload.get("phase_c", {}).get("topology_optimization", {}))
+    except (RuntimeError, FileNotFoundError, ValueError) as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/plants")
+def get_plants() -> Any:
+    return jsonify(list_plants(runtime_dir_path()))
+
+
+@app.get("/api/observability")
+def get_observability_data() -> Any:
+    return jsonify(get_observability(runtime_dir_path()))
 
 
 @app.get("/api/walls")
