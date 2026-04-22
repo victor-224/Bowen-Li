@@ -2,8 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Industrial Equipment Digital Twin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Industrial Digital Twin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 1.5rem; line-height: 1.4; }
+    h1 { font-size: 1.25rem; }
+    h2 { font-size: 1rem; margin-top: 1.25rem; }
+    #status { color: #555; font-size: 0.9rem; }
+    #equipment-list { list-style: none; padding: 0; max-width: 48rem; }
+    #equipment-list li { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
+    #equipment-list .tag { font-weight: 600; margin-right: 0.5rem; }
+    #three-container {
+      min-height: 12rem;
+      margin-top: 1rem;
+      border: 1px dashed #999;
+      border-radius: 4px;
+      background: #f8f8f8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .error { color: #a00; }
+  </style>
 </head>
 <body>
+  <h1>Industrial Digital Twin</h1>
+  <p id="status">Loading…</p>
+
+  <h2>Equipment (from /api/equipment)</h2>
+  <ul id="equipment-list"></ul>
+
+  <h2>Scene (from /api/scene)</h2>
+  <p id="scene-meta"></p>
+  <div id="three-container">3D view placeholder — <code>#three-container</code></div>
+
+  <script src="app.js"></script>
 </body>
 </html>

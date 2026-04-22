@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, MutableMapping, Optional
+from typing import Any, Dict, List, MutableMapping, Optional
 
 import openpyxl
 from flask import Flask, jsonify
+from flask_cors import CORS
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -79,7 +80,28 @@ def load_equipment_from_excel(path: Optional[Path] = None) -> Dict[str, Dict[str
     return out
 
 
+def equipment_dict_to_list(equipment: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Stable list form: one object per row with explicit tag field."""
+    return [{"tag": tag, **row} for tag, row in equipment.items()]
+
+
+def build_scene(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Unified scene document (2D/3D consumer); walls reserved for future use."""
+    if equipment is None:
+        equipment = load_equipment_from_excel()
+    return {
+        "equipment": equipment_dict_to_list(equipment),
+        "walls": [],
+        "meta": {"project": "Industrial Digital Twin"},
+    }
+
+
 app = Flask(__name__)
+CORS(
+    app,
+    resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
+    supports_credentials=True,
+)
 
 
 @app.get("/api/equipment")
@@ -91,6 +113,17 @@ def get_equipment() -> Any:
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
     return jsonify(data)
+
+
+@app.get("/api/scene")
+def get_scene() -> Any:
+    try:
+        equipment = load_equipment_from_excel()
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(build_scene(equipment))
 
 
 if __name__ == "__main__":
