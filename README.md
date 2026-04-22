@@ -272,3 +272,116 @@ python3 -m http.server 3000
 ## 📜 License
 
 以仓库中的 LICENSE 文件为准（如未提供则按项目后续补充）。
+
+---
+
+## 八、运行限制说明（真实工程情况）
+
+🇨🇳  
+在当前 headless（无GUI）环境中：
+
+- OCR 可能出现识别不完整
+- pickpoint 人工采点功能不可弹窗使用
+
+系统设计为：
+
+✔ 自动 fallback（回退机制）  
+✔ 不崩溃  
+✔ 返回结构化错误或缓存结果
+
+---
+
+🇫🇷  
+Dans un environnement headless :
+
+- L’OCR peut être partiellement limité
+- Le module pickpoint (clic manuel) ne peut pas s’afficher
+
+Le système :
+
+✔ utilise un fallback automatique  
+✔ ne plante jamais  
+✔ renvoie des résultats structurés ou mis en cache
+
+---
+
+## 九、下一阶段路线图（Roadmap）
+
+🚀 **Stability / 稳定性增强**
+
+- `positions_cache.json` fallback（OCR失败回退机制）
+- confidence-weighted edges（关系置信度加权）
+
+---
+
+🧠 **Semantic Upgrade / 语义增强**
+
+Zone 分类系统：
+
+- pipe_rack（管廊区域）
+- storage（存储区）
+- maintenance_corridor（维护通道）
+- process_unit（工艺单元）
+
+---
+
+🎨 **Frontend Upgrade / 前端增强**
+
+- layer toggle system（图层开关系统）
+- zones / edges / labels / walls 可视化
+- mini map（小地图导航）
+- camera presets（视角预设）
+
+---
+
+🏭 **Industrial Expansion / 工业级扩展**
+
+未来支持：
+
+- AutoCAD DXF import
+- CATIA STEP / IGES support
+- Blender 自动建模
+- AI 工艺流推理（process reasoning）
+
+---
+
+## 十、项目价值（定位升级）
+
+🇨🇳  
+本项目是：  
+**工业图纸理解系统 + 数字孪生底层引擎 + 语义建模框架**
+
+---
+
+🇫🇷  
+Ce projet est :  
+**un moteur de compréhension de plans industriels**  
+**et une base de jumeau numérique + modélisation sémantique**
+
+---
+
+## 十一、核心工程原则（必须遵守）
+
+✔ Zero config（零配置运行）  
+✔ Auto file detection（自动文件识别）  
+✔ Layout Graph first-class architecture（图结构为核心）  
+✔ python3 only（统一Python3）  
+✔ GitHub-ready formatting（可直接开源展示）  
+✔ Industrial-grade clarity（工业级表达清晰度）
+
+---
+
+## 📌 可选增强建议（重要提示）
+
+如果你愿意，我可以下一步再帮你做一个：
+
+👉 **README 封面增强版**
+
+包含：
+
+- 系统流程图（Mermaid升级版）
+- 模块架构图（Backend / Frontend / AI pipeline）
+- API响应示例卡片 UI化展示
+- GitHub主页视觉优化结构
+
+用于更强的开源展示效果。
