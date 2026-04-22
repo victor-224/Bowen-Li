@@ -94,21 +94,6 @@ flowchart TB
 
 ==================================================
 
-## 🚀 GitHub Banner（封面强化）
-
-```text
-███████████████████████████████████
-INDUSTRIAL DIGITAL TWIN SYSTEM
-███████████████████████████████████
-
-✔ Auto Layout Understanding
-✔ OCR Spatial Intelligence
-✔ Semantic Graph Engine
-✔ 3D Industrial Reconstruction
-```
-
----
-
 ## ✅ Current System Features / 当前系统能力
 
 ### 1️⃣ 智能文件识别系统（Zero naming dependency）
@@ -533,17 +518,3 @@ Ce projet est :
 
 ---
 
-## 📌 可选增强建议（重要提示）
-
-如果你愿意，我可以下一步再帮你做一个：
-
-👉 **README 封面增强版**
-
-包含：
-
-- 系统流程图（Mermaid升级版）
-- 模块架构图（Backend / Frontend / AI pipeline）
-- API响应示例卡片 UI化展示
-- GitHub主页视觉优化结构
-
-用于更强的开源展示效果。
