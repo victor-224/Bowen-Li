@@ -1,20 +1,16 @@
-# 🌐 Industrial Digital Twin System  
+# 🌐 Industrial Digital Twin System / Système de Jumeau Numérique Industriel  
 # 工业数字孪生系统
-
-==================================================
-
-## 📌 One-line Overview
-
-将工业二维图纸（PDF/PNG）+ Excel设备数据  
-自动转换为可交互3D工业数字孪生系统（AI驱动）。
 
 ---
 
-# 🧠 Industrial AI · Spatial Computing · Graph Engineering System
+## 📌 One-line Overview / Résumé en une phrase / 一句话概览
 
-==================================================
+🇨🇳 将工业二维图纸（PDF/PNG）与 Excel 设备数据自动转换为可交互 3D 工业数字孪生系统。  
+🇫🇷 Transformation automatique des plans industriels 2D (PDF/PNG) et des données Excel en système 3D interactif de jumeau numérique industriel.
 
-## 🧭 System Pipeline / 工业数据流（Mermaid）
+---
+
+## 🧭 System Pipeline / Pipeline système / 工业数据流（Mermaid）
 
 ```mermaid
 flowchart LR
@@ -31,9 +27,9 @@ flowchart LR
   renderer --> dashboard["🌐 Web Visualization Dashboard"]
 ```
 
-==================================================
+---
 
-## 🏗 System Architecture / 系统架构（Mermaid）
+## 🏗 System Architecture / Architecture système / 系统架构（Mermaid）
 
 ```mermaid
 flowchart TB
@@ -63,9 +59,9 @@ flowchart TB
   pidFuture --> threeRenderer --> graphUi --> dashboard
 ```
 
-==================================================
+---
 
-## 📡 API Overview（UI卡片风格）
+## 📡 API Overview / Vue API / 接口总览
 
 ```text
 ┌────────────────────────────────────┐
@@ -92,75 +88,38 @@ flowchart TB
 └────────────────────────────────────┘
 ```
 
-==================================================
-
-## ✅ Current System Features / 当前系统能力
-
-### 1️⃣ 智能文件识别系统（Zero naming dependency）
-
-🇨🇳  
-用户只需将文件放入：
-
-`data/`
-
-系统自动识别：
-
-- layout（二维图纸）
-- excel（设备清单）
-- reference（技术参考）
-- gad（标准图纸）
-- structure（结构图）
-
-✔ 无需改名  
-✔ 支持中文/英文/法语文件名  
-✔ 自动分类
-
 ---
 
-### 2️⃣ PDF 图纸解析系统
+## ✅ Current System Features / Fonctionnalités actuelles / 当前系统能力
 
-✔ PDF → 图像转换  
-✔ 多页拆分  
-✔ 自动选择第一页作为布局图  
-✔ runtime缓存机制
+### 1️⃣ Smart File Classification / Classification intelligente des fichiers / 智能文件识别
 
----
+🇨🇳 用户只需将文件放入 `data/`，系统自动识别 `layout / excel / reference / gad / structure`。  
+🇫🇷 Il suffit de déposer les fichiers dans `data/`, le système identifie automatiquement `layout / excel / reference / gad / structure`.
 
-### 3️⃣ OCR设备定位系统
+- ✔ 无需改名 / sans renommage
+- ✔ 支持中英法命名 / noms chinois-anglais-français supportés
+- ✔ 自动分类 / classification automatique
 
-自动识别设备 Tag：
+### 2️⃣ PDF Parsing Engine / Moteur d’analyse PDF / PDF 图纸解析
 
-- B200
-- E100
-- P001A
+🇨🇳 支持 PDF 转图像、多页拆分、首页布局选择、runtime 缓存。  
+🇫🇷 Conversion PDF→image, découpage multi-pages, sélection de la première page comme layout, cache runtime.
 
-输出：
+### 3️⃣ OCR Positioning / Positionnement OCR / OCR 设备定位
 
-- 坐标 `position`
-- 置信度 `confidence`
-- 来源 `source`（ocr / pickpoint / fallback）
+🇨🇳 自动识别设备 Tag（如 B200/E100/P001A），输出 `position / confidence / source`。  
+🇫🇷 Détection automatique des tags équipement (B200/E100/P001A) avec sortie `position / confidence / source`.
 
----
+### 4️⃣ Excel Semantic Fusion / Fusion sémantique Excel / Excel 语义融合
 
-### 4️⃣ Excel设备语义融合系统
+🇨🇳 解析 `tag/service/diameter/length/height/position`，用于属性绑定与工艺语义。  
+🇫🇷 Analyse `tag/service/diameter/length/height/position` pour liaison d’attributs et sémantique de procédé.
 
-解析：
+### 5️⃣ Layout Graph Core / Noyau Layout Graph / Layout Graph 核心
 
-- tag
-- service
-- diameter
-- length
-- height
-- position
-
-✔ 设备属性绑定  
-✔ 工艺分类支持（pump / tank / exchanger）
-
----
-
-### 5️⃣ Layout Graph（核心创新）
-
-系统输出结构化工业语义图：
+🇨🇳 系统输出结构化工业语义图：  
+🇫🇷 Le système produit un graphe sémantique industriel structuré :
 
 ```json
 {
@@ -174,124 +133,82 @@ flowchart TB
 
 ---
 
-## 🏗️ System Architecture / 系统架构
+## 📁 Data Folder Policy / Politique du dossier data / 数据目录规则
 
-```
-data/
-  ├─ (任意命名的 PDF / PNG / JPG / XLSX)
-  ↓
-file_classifier
-  ↓
-pdf_loader (if PDF layout)
-  ↓
-locator (OCR + fallback)
-  ↓
-excel parser (semantic binding)
-  ↓
-walls parser
-  ↓
-relations engine
-  ↓
-layout_graph builder
-  ↓
-API output + Three.js rendering
-```
+🇨🇳 用户可自由命名并放入：PDF/PNG/JPG/JPEG/XLSX。  
+🇫🇷 Les fichiers peuvent être nommés librement : PDF/PNG/JPG/JPEG/XLSX.
+
+支持类型 / Types pris en charge:
+- layout（布局图）
+- excel（设备表）
+- reference（参考资料）
+- gad（标准图）
+- structure（结构图）
+
+系统会自动分类并写入 `data/runtime/` 缓存。  
+Le système classe automatiquement et écrit le cache dans `data/runtime/`.
 
 ---
 
-## 📁 Data Folder Policy / 数据目录规则
+## 🚀 Quick Start / Démarrage rapide / 快速启动（python3）
 
-用户可自由命名并放入以下类型文件：
-
-- 工业布局图：PDF / PNG / JPG / JPEG
-- 设备表：XLSX
-- 技术参考：PDF
-- GAD Typical：PDF
-- 结构图：PDF / PNG / JPG / JPEG
-
-系统会自动分类，必要时写入：
-
-- `data/runtime/`
-
----
-
-## 🚀 Quick Start / 快速启动（统一 python3）
-
-### 1) 安装依赖
+### 1) Install dependencies / Installer les dépendances / 安装依赖
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-### 2) 启动后端（5000）
+### 2) Start backend (5000) / Démarrer le backend / 启动后端
 
 ```bash
 python3 -m backend.api
 ```
 
-### 3) 启动前端（3000）
+### 3) Start frontend (3000) / Démarrer le frontend / 启动前端
 
 ```bash
 cd frontend
 python3 -m http.server 3000
 ```
 
-### 4) 打开浏览器
+### 4) Open browser / Ouvrir le navigateur / 打开浏览器
 
 - `http://localhost:3000`
 
 ---
 
-## 🧭 End-to-End Flow / 全链路流程
+## 🧭 End-to-End Flow / Flux bout-en-bout / 全链路流程
 
-1. 把文件放进 `data/`（任意命名）
-2. 启动后端和前端
-3. 打开网页并点击「加载项目」
-4. 系统自动执行：
-   - 文件识别
-   - PDF转图
-   - OCR定位
-   - Excel语义融合
-   - 墙体/房间解析
-   - 空间关系计算
-   - Layout Graph生成
-   - Three.js实时更新
+1. 🇨🇳 把文件放进 `data/`（任意命名）  
+   🇫🇷 Déposer les fichiers dans `data/` (nommage libre)
+2. 🇨🇳 启动后端与前端  
+   🇫🇷 Démarrer backend et frontend
+3. 🇨🇳 打开网页并点击「加载项目」  
+   🇫🇷 Ouvrir la page et cliquer « Charger le projet »
+4. 🇨🇳 系统自动执行：文件识别→PDF转图→OCR定位→Excel融合→墙体解析→关系计算→Graph生成→Three.js更新  
+   🇫🇷 Exécution automatique : classification→PDF→OCR→fusion Excel→murs→relations→graphe→rendu Three.js
 
 ---
 
-## 🌐 API Overview / API接口总览
+## 🌐 API Overview / Vue d’ensemble API / API接口总览
 
-### 基础接口
+### 基础接口 / API de base / Basic APIs
 
-- `GET /api/files`  
-  当前自动识别到的文件分类结果
+- `GET /api/files` — 🇨🇳 当前识别文件 / 🇫🇷 fichiers classifiés
+- `GET /api/status` — 🇨🇳 完整性状态 / 🇫🇷 état de complétude
+- `POST /api/upload` — 🇨🇳 上传并重算 / 🇫🇷 upload + recalcul
 
-- `GET /api/status`  
-  文件完整性状态（ready / missing）
+### 语义接口 / API sémantiques / Semantic APIs
 
-- `POST /api/upload`  
-  上传新文件并触发自动重算
-
-### 语义与场景接口
-
-- `GET /api/scene`  
-  3D场景设备数据
-
-- `GET /api/walls`  
-  墙体/房间/中心点
-
-- `GET /api/relations`  
-  空间关系（距离/左右/靠墙/平行等）
-
-- `GET /api/layout_graph`  
-  语义图结构（nodes / edges / zones / constraints）
-
-- `GET /api/pipeline`  
-  统一总输出（scene + relations + walls + layout_graph）
+- `GET /api/scene` — 🇨🇳 场景数据 / 🇫🇷 données de scène
+- `GET /api/walls` — 🇨🇳 墙体房间中心 / 🇫🇷 murs, salles, centre
+- `GET /api/relations` — 🇨🇳 空间关系 / 🇫🇷 relations spatiales
+- `GET /api/layout_graph` — 🇨🇳 语义图结构 / 🇫🇷 structure de graphe sémantique
+- `GET /api/pipeline` — 🇨🇳 统一输出 / 🇫🇷 sortie unifiée
 
 ---
 
-## 🧩 API Response Cards / API响应示例卡片
+## 🧩 API Response Cards / Cartes de réponse API / API响应示例
 
 ### `GET /api/pipeline`
 
@@ -328,193 +245,66 @@ python3 -m http.server 3000
 
 ```json
 {
-  "nodes": [
-    {
-      "id": "B200",
-      "type": "tank",
-      "service_system": "reactor_settler",
-      "process_role": "storage_reaction",
-      "zone": "Z1",
-      "position_mm": [8210.4, 12250.2],
-      "confidence": 0.93
-    }
-  ],
-  "edges": [
-    { "source": "B200", "target": "P001A", "type": "left_of", "weight": 1.0 },
-    { "source": "B200", "target": "P001A", "type": "connected_process", "weight": 0.8 }
-  ],
-  "zones": [
-    { "zone_id": "Z1", "type": "process_unit", "devices": ["B200", "P001A"], "center": [8200, 12100] }
-  ],
-  "constraints": [
-    { "type": "zone_capacity", "zone_id": "Z1", "max_devices": 12 }
-  ],
-  "walls": {
-    "walls": [],
-    "rooms": [],
-    "center": [8750.0, 8750.0]
-  }
+  "nodes": [],
+  "edges": [],
+  "zones": [],
+  "constraints": [],
+  "walls": {}
 }
 ```
 
 ---
 
-## 🖥️ Frontend UI / 前端展示能力
+## 🖥️ Frontend UI / Interface Frontend / 前端展示能力
 
-目前前端支持：
-
-- 数据上传面板（图纸 + Excel + 参考PDF + GAD）
-- Three.js 实时渲染（非写死坐标）
-- 设备 tag 显示
-- 设备点击查看属性
-- Zone/Edge 图语义可视化
-- 右侧信息面板（设备语义信息）
+🇨🇳 支持上传面板、Three.js 实时渲染、设备点击详情、Zone/Edge 可视化与右侧信息栏。  
+🇫🇷 Prise en charge du panneau d’upload, rendu Three.js temps réel, détails par clic, visualisation Zone/Edge et panneau d’information.
 
 ---
 
-## 🧪 Industrial Notes / 工业使用说明
+## 🧪 Industrial Notes / Notes industrielles / 工业运行说明
 
-- 坐标原则：图纸优先，Excel只做属性补全
-- 文件原则：零命名依赖
-- 算法原则：支持反复更换文件后自动重算
-- 兼容原则：无 GUI 服务器环境下，OCR失败会返回结构化错误信息
+- 🇨🇳 图纸优先，Excel 补属性；🇫🇷 priorité au plan, Excel pour les attributs
+- 🇨🇳 零命名依赖；🇫🇷 aucune dépendance de nommage
+- 🇨🇳 反复换文件可自动重算；🇫🇷 recalcul automatique après remplacement des fichiers
+- 🇨🇳 无 GUI 环境下 OCR 失败返回结构化错误；🇫🇷 en mode headless, retour d’erreur structurée si OCR échoue
 
 ---
 
-## 🛣️ Roadmap / 路线图
+## 🛣️ Roadmap / Feuille de route / 路线图
 
-### Phase A（已完成）
-
-- 自动文件分类
-- PDF转图
+### Phase A（已完成 / Terminé）
+- 自动文件分类 / Classification auto
+- PDF转图 / PDF→image
 - OCR定位 + fallback
-- Excel属性融合
-- 墙体/房间解析
-- 关系引擎
-- Layout Graph基础结构
+- Excel语义融合 / Fusion sémantique Excel
+- 墙体房间解析 / Analyse murs-salles
+- 关系引擎 / Moteur de relations
+- Layout Graph 基础结构
 
-### Phase B（进行中）
-
+### Phase B（进行中 / En cours）
 - OCR稳定性增强（缓存 + 多模型投票）
 - Zone语义细分（process_unit / utility / storage / corridor）
 - 关系边置信度评分
 - 更强工艺流推理（upstream/downstream）
 
-### Phase C（规划中）
-
-- P&ID 联动
-- 设备拓扑约束优化
-- 多工厂版本管理
-- 部署级 observability（metrics / tracing / audit）
-
----
-
-## 🤝 Contribution / 贡献建议
-
-- 欢迎提交 PR：算法增强、识别稳定性、前端工业可视化增强
-- 建议包含：输入样例、期望输出、失败案例
+### Phase C（规划中 / Planifié）
+- P&ID 联动 / Intégration P&ID
+- 拓扑约束优化 / Optimisation topologique
+- 多工厂版本管理 / Versioning multi-usines
+- Observability（metrics/tracing/audit）
 
 ---
 
-## 📜 License
+## 🤝 Contribution / Contribution / 贡献建议
 
-以仓库中的 LICENSE 文件为准（如未提供则按项目后续补充）。
-
----
-
-## 八、运行限制说明（真实工程情况）
-
-🇨🇳  
-在当前 headless（无GUI）环境中：
-
-- OCR 可能出现识别不完整
-- pickpoint 人工采点功能不可弹窗使用
-
-系统设计为：
-
-✔ 自动 fallback（回退机制）  
-✔ 不崩溃  
-✔ 返回结构化错误或缓存结果
+🇨🇳 欢迎 PR（算法、识别稳定性、工业可视化）。  
+🇫🇷 Contributions bienvenues (algorithmes, robustesse OCR, visualisation industrielle).
 
 ---
 
-🇫🇷  
-Dans un environnement headless :
+## 📜 License / Licence / 许可证
 
-- L’OCR peut être partiellement limité
-- Le module pickpoint (clic manuel) ne peut pas s’afficher
-
-Le système :
-
-✔ utilise un fallback automatique  
-✔ ne plante jamais  
-✔ renvoie des résultats structurés ou mis en cache
-
----
-
-## 九、下一阶段路线图（Roadmap）
-
-🚀 **Stability / 稳定性增强**
-
-- `positions_cache.json` fallback（OCR失败回退机制）
-- confidence-weighted edges（关系置信度加权）
-
----
-
-🧠 **Semantic Upgrade / 语义增强**
-
-Zone 分类系统：
-
-- pipe_rack（管廊区域）
-- storage（存储区）
-- maintenance_corridor（维护通道）
-- process_unit（工艺单元）
-
----
-
-🎨 **Frontend Upgrade / 前端增强**
-
-- layer toggle system（图层开关系统）
-- zones / edges / labels / walls 可视化
-- mini map（小地图导航）
-- camera presets（视角预设）
-
----
-
-🏭 **Industrial Expansion / 工业级扩展**
-
-未来支持：
-
-- AutoCAD DXF import
-- CATIA STEP / IGES support
-- Blender 自动建模
-- AI 工艺流推理（process reasoning）
-
----
-
-## 十、项目价值（定位升级）
-
-🇨🇳  
-本项目是：  
-**工业图纸理解系统 + 数字孪生底层引擎 + 语义建模框架**
-
----
-
-🇫🇷  
-Ce projet est :  
-**un moteur de compréhension de plans industriels**  
-**et une base de jumeau numérique + modélisation sémantique**
-
----
-
-## 十一、核心工程原则（必须遵守）
-
-✔ Zero config（零配置运行）  
-✔ Auto file detection（自动文件识别）  
-✔ Layout Graph first-class architecture（图结构为核心）  
-✔ python3 only（统一Python3）  
-✔ GitHub-ready formatting（可直接开源展示）  
-✔ Industrial-grade clarity（工业级表达清晰度）
-
----
+以仓库 LICENSE 为准。  
+Référez-vous au fichier LICENSE du dépôt.
 
