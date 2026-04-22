@@ -19,6 +19,9 @@ const infoTagEl = document.getElementById("info-tag");
 const infoServiceEl = document.getElementById("info-service");
 const infoSizeEl = document.getElementById("info-size");
 const infoPosEl = document.getElementById("info-pos");
+const infoZoneEl = document.getElementById("info-zone");
+const infoFlowEl = document.getElementById("info-flow");
+const infoNearestEl = document.getElementById("info-nearest");
 
 function setStatus(text, isError) {
   statusEl.textContent = text;

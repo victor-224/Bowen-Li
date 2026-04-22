@@ -145,5 +145,29 @@ def build_relations(scene: Dict[str, Any]) -> Dict[str, Any]:
         relations[f"{ta}_parallel_{tb}"] = is_parallel
         relations[f"{tb}_parallel_{ta}"] = is_parallel
 
+        za = a.get("zone_id")
+        zb = b.get("zone_id")
+        if za is not None and zb is not None:
+            same_zone = str(za) == str(zb)
+            relations[f"{ta}_in_same_zone_{tb}"] = same_zone
+            relations[f"{tb}_in_same_zone_{ta}"] = same_zone
+
+        # Basic process connectivity heuristics from service/type affinity.
+        sa = str(a.get("service", "")).strip().lower()
+        sb = str(b.get("service", "")).strip().lower()
+        connected = False
+        if sa and sb:
+            tokens_a = set(sa.replace("/", " ").replace("-", " ").split())
+            tokens_b = set(sb.replace("/", " ").replace("-", " ").split())
+            connected = len(tokens_a.intersection(tokens_b)) > 0
+        relations[f"{ta}_connected_process_{tb}"] = connected
+        relations[f"{tb}_connected_process_{ta}"] = connected
+
+        # Directional process hint: lower y as upstream baseline.
+        relations[f"{ta}_upstream_{tb}"] = ay < by
+        relations[f"{tb}_upstream_{ta}"] = by < ay
+        relations[f"{ta}_downstream_{tb}"] = ay > by
+        relations[f"{tb}_downstream_{ta}"] = by > ay
+
     return relations
 

@@ -12,6 +12,7 @@ from backend.file_classifier import classify_files
 from backend.pdf_loader import first_page_to_layout_png
 from backend.relations import build_relations
 from backend.walls import parse_walls_and_rooms
+from backend.layout_graph import build_layout_graph
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -154,6 +155,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
         equipment = load_equipment_from_excel()
     scene_doc = build_scene(equipment)
     relations = build_relations(scene_doc)
+    layout_graph = build_layout_graph(scene_doc, scene_doc.get("walls", []), relations, equipment)
     walls_doc = {
         "walls": scene_doc.get("walls", []),
         "rooms": scene_doc.get("rooms", []),
@@ -164,6 +166,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
         "walls": walls_doc,
+        "layout_graph": layout_graph,
     }
 
 
@@ -274,6 +277,25 @@ def get_pipeline() -> Any:
             500,
         )
     except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/layout_graph")
+def get_layout_graph() -> Any:
+    try:
+        equipment = load_equipment_from_excel()
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        payload = build_pipeline_output(equipment)
+        return jsonify(payload.get("layout_graph", {"nodes": [], "edges": [], "zones": [], "constraints": []}))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 500
+    except ValueError as e:
         return jsonify({"error": str(e)}), 500
 
 

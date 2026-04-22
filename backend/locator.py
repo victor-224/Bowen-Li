@@ -1,4 +1,4 @@
-"""Locate equipment tag positions from plan image (OCR-first, pickpoint fallback)."""
+"""Locate equipment tag positions with confidence and fallback chain."""
 
 from __future__ import annotations
 
@@ -42,12 +42,16 @@ def _extract_candidate_tags(text: str) -> Iterable[str]:
             yield t
 
 
-def _detect_with_easyocr(plan_path: Path) -> Dict[str, Tuple[int, int]]:
+def _is_pdf(path: Path) -> bool:
+    return path.suffix.lower() == ".pdf"
+
+
+def _detect_with_easyocr(plan_path: Path) -> Dict[str, Dict[str, object]]:
     import easyocr  # optional dependency, imported lazily
 
     reader = easyocr.Reader(["en"], gpu=False)
     results = reader.readtext(str(plan_path))
-    out: Dict[str, Tuple[int, int]] = {}
+    out: Dict[str, Dict[str, object]] = {}
     conf_map: Dict[str, float] = {}
     for item in results:
         # item: [bbox, text, confidence]
@@ -61,7 +65,36 @@ def _detect_with_easyocr(plan_path: Path) -> Dict[str, Tuple[int, int]]:
             prev_conf = conf_map.get(tag, -1.0)
             if float(confidence) >= prev_conf:
                 conf_map[tag] = float(confidence)
-                out[tag] = (cx, cy)
+                out[tag] = {
+                    "pos": [cx, cy],
+                    "confidence": max(0.0, min(1.0, float(confidence))),
+                    "source": "ocr",
+                }
+    return out
+
+
+def _detect_with_pdf_text_layer(pdf_path: Path) -> Dict[str, Dict[str, object]]:
+    """Extract tag locations from PDF text layer (fallback 2)."""
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(str(pdf_path))
+    out: Dict[str, Dict[str, object]] = {}
+    try:
+        if len(doc) == 0:
+            return out
+        page = doc[0]
+        words = page.get_text("words")
+        for w in words:
+            x0, y0, x1, y1, text = w[:5]
+            tags = list(_extract_candidate_tags(str(text)))
+            if not tags:
+                continue
+            cx = int((float(x0) + float(x1)) / 2)
+            cy = int((float(y0) + float(y1)) / 2)
+            for tag in tags:
+                out[tag] = {"pos": [cx, cy], "confidence": 0.7, "source": "pdf_text"}
+    finally:
+        doc.close()
     return out
 
 
@@ -71,6 +104,102 @@ def _pickpoint_available() -> bool:
     import os
 
     return bool(os.environ.get("DISPLAY"))
+
+
+def _estimate_missing_positions(
+    out: Dict[str, Dict[str, object]],
+    tags: set[str],
+) -> Dict[str, Dict[str, object]]:
+    """
+    Fallback 3: estimate missing tags by compact clustering around existing positions.
+    """
+    missing = [t for t in sorted(tags) if t not in out]
+    if not missing:
+        return out
+    if out:
+        xs = [float(v["pos"][0]) for v in out.values()]
+        ys = [float(v["pos"][1]) for v in out.values()]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+    else:
+        cx = 1000.0
+        cy = 1000.0
+
+    step = 80.0
+    for i, tag in enumerate(missing):
+        dx = (i % 6) * step
+        dy = (i // 6) * step
+        out[tag] = {
+            "pos": [int(cx + dx), int(cy + dy)],
+            "confidence": 0.35,
+            "source": "cluster_estimate",
+        }
+    return out
+
+
+def detect_positions_with_confidence(
+    plan_path: Path | None = None,
+    allowed_tags: set[str] | None = None,
+    pdf_source_path: Path | None = None,
+) -> Dict[str, Dict[str, object]]:
+    """
+    Return position map with confidence:
+      { "B200": {"pos":[x,y], "confidence":0.92, "source":"ocr"}, ... }
+    """
+    p = plan_path if plan_path is not None else default_plan_path()
+    if not p.is_file():
+        raise FileNotFoundError(f"Plan image not found: {p}")
+
+    out: Dict[str, Dict[str, object]]
+    try:
+        out = _detect_with_easyocr(p)
+    except Exception:
+        out = {}
+
+    allowed = set(allowed_tags) if allowed_tags is not None else None
+    if allowed is not None:
+        out = {k: v for k, v in out.items() if k in allowed}
+    if out:
+        if allowed is not None:
+            return _estimate_missing_positions(out, allowed)
+        return out
+
+    # fallback 2: PDF text layer
+    pdf_path = pdf_source_path
+    if pdf_path is None and _is_pdf(p):
+        pdf_path = p
+    if pdf_path is not None and pdf_path.is_file():
+        try:
+            out = _detect_with_pdf_text_layer(pdf_path)
+        except Exception:
+            out = {}
+        if allowed is not None:
+            out = {k: v for k, v in out.items() if k in allowed}
+        if out:
+            if allowed is not None:
+                return _estimate_missing_positions(out, allowed)
+            return out
+
+    # fallback 1: manual pickpoint (only if GUI available)
+    if _pickpoint_available():
+        try:
+            picked = pick_points_on_plan(p)
+            out = {
+                str(k): {"pos": [int(v[0]), int(v[1])], "confidence": 0.85, "source": "pickpoint"}
+                for k, v in picked.items()
+            }
+            if allowed is not None:
+                out = {k: v for k, v in out.items() if k in allowed}
+            if allowed is not None:
+                return _estimate_missing_positions(out, allowed)
+            return out
+        except Exception:
+            pass
+
+    # fallback 3: clustering estimate only if allowed tags known
+    if allowed is not None:
+        return _estimate_missing_positions({}, allowed)
+    raise RuntimeError("No positions detected and no fallback available.")
 
 
 def detect_positions(
@@ -85,35 +214,11 @@ def detect_positions(
     1) OCR (easyocr) on plan image text
     2) If OCR fails / yields empty: fallback to manual pickpoint
     """
-    p = plan_path if plan_path is not None else default_plan_path()
-    if not p.is_file():
-        raise FileNotFoundError(f"Plan image not found: {p}")
-
-    try:
-        positions = _detect_with_easyocr(p)
-    except Exception:
-        positions = {}
-
-    if allowed_tags is not None:
-        positions = {k: v for k, v in positions.items() if k in allowed_tags}
-    if positions:
-        return positions
-
-    # Fallback requested: manual click points on plan (only when GUI is available).
-    if _pickpoint_available():
-        try:
-            picked = pick_points_on_plan(p)
-            picked_map = {str(k): (int(v[0]), int(v[1])) for k, v in picked.items()}
-            if allowed_tags is not None:
-                return {k: v for k, v in picked_map.items() if k in allowed_tags}
-            return picked_map
-        except Exception:
-            # In some environments DISPLAY exists but OpenCV HighGUI is unavailable.
-            pass
-    raise RuntimeError(
-        "OCR did not detect any tag positions and interactive pickpoint fallback "
-        "is unavailable in headless environment (DISPLAY not set)."
-    )
+    rich = detect_positions_with_confidence(plan_path=plan_path, allowed_tags=allowed_tags)
+    return {
+        tag: (int(data["pos"][0]), int(data["pos"][1]))
+        for tag, data in rich.items()
+    }
 
 
 def pixel_to_mm(

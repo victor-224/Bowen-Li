@@ -67,6 +67,7 @@ python3 -m http.server 3000
 - `GET /api/status`：文件完整性状态
 - `GET /api/scene`：场景数据
 - `GET /api/relations`：空间关系
+- `GET /api/layout_graph`：工业布局语义图 `{nodes, edges, zones, constraints}`
 - `GET /api/walls`：墙体/房间/中心
 - `GET /api/pipeline`：统一总输出 `{scene, relations, walls}`
 - `POST /api/upload`：上传并自动重算
