@@ -1,4 +1,4 @@
-"""Flask JSON API: equipment data from Excel (server-side only)."""
+"""Flask API for industrial digital twin auto-ingestion pipeline."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import Any, Dict, List, MutableMapping, Optional
 import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from backend.file_classifier import classify_files
+from backend.pdf_loader import first_page_to_layout_png
 from backend.relations import build_relations
 from backend.walls import parse_walls_and_rooms
 
@@ -43,10 +45,18 @@ def runtime_excel_path() -> Path:
     return _repo_root() / _RUNTIME_EXCEL_REL
 
 
+def data_dir_path() -> Path:
+    return _repo_root() / "data"
+
+
 def _excel_path() -> Path:
     runtime_excel = runtime_excel_path()
     if runtime_excel.is_file():
         return runtime_excel
+    classified = classify_files(data_dir_path())
+    xlsx = classified.get("excel")
+    if xlsx:
+        return Path(str(xlsx))
     return _repo_root() / _EXCEL_REL
 
 
@@ -54,6 +64,14 @@ def plan_image_path() -> Path:
     runtime_plan = runtime_plan_path()
     if runtime_plan.is_file():
         return runtime_plan
+    classified = classify_files(data_dir_path())
+    layout_src = classified.get("layout")
+    if layout_src:
+        p = Path(str(layout_src))
+        if p.suffix.lower() == ".pdf":
+            runtime_dir_path().mkdir(parents=True, exist_ok=True)
+            return first_page_to_layout_png(p, runtime_plan)
+        return p
     return _repo_root() / Path("data") / "plan_hd.png"
 
 
@@ -122,7 +140,7 @@ def build_scene(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[s
 
     if equipment is None:
         equipment = load_equipment_from_excel()
-    return build_scene_document(equipment)
+    return build_scene_document(equipment, plan_path=plan_image_path())
 
 
 def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -197,6 +215,42 @@ def get_relations() -> Any:
         return jsonify({"error": str(e)}), 500
 
 
+@app.get("/api/files")
+def get_files() -> Any:
+    classified = classify_files(data_dir_path())
+    out: Dict[str, Any] = {}
+    for k, v in classified.items():
+        if isinstance(v, Path):
+            out[k] = str(v)
+        elif isinstance(v, list):
+            out[k] = [str(x) for x in v]
+        else:
+            out[k] = None
+    return jsonify(out)
+
+
+@app.get("/api/status")
+def get_status() -> Any:
+    classified = classify_files(data_dir_path())
+    required = {"layout", "excel"}
+    missing = sorted(list(required - set(k for k, v in classified.items() if v)))
+    files_out: Dict[str, Any] = {}
+    for k, v in classified.items():
+        if isinstance(v, Path):
+            files_out[k] = str(v)
+        elif isinstance(v, list):
+            files_out[k] = [str(x) for x in v]
+        else:
+            files_out[k] = None
+    return jsonify(
+        {
+            "ready": len(missing) == 0,
+            "missing": missing,
+            "files": files_out,
+        }
+    )
+
+
 @app.get("/api/pipeline")
 def get_pipeline() -> Any:
     try:
@@ -235,29 +289,63 @@ def get_walls() -> Any:
 
 @app.post("/api/upload")
 def upload_project_files() -> Any:
-    plan_file = request.files.get("plan_file")
-    excel_file = request.files.get("excel_file")
-
-    if plan_file is None or excel_file is None:
-        return jsonify({"success": False, "error": "plan_file and excel_file are required"}), 400
-
-    plan_name = (plan_file.filename or "").lower()
-    excel_name = (excel_file.filename or "").lower()
-    if not plan_name.endswith((".png", ".jpg", ".jpeg")):
-        return jsonify({"success": False, "error": "plan_file must be png/jpg/jpeg"}), 400
-    if not excel_name.endswith(".xlsx"):
-        return jsonify({"success": False, "error": "excel_file must be .xlsx"}), 400
-
     runtime_dir = runtime_dir_path()
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
-    plan_target = runtime_plan_path()
-    excel_target = runtime_excel_path()
-    plan_file.save(plan_target)
-    excel_file.save(excel_target)
+    # Support explicit typed fields and arbitrary multi-file uploads.
+    files = list(request.files.items(multi=True))
+    if not files:
+        return jsonify({"success": False, "error": "No files uploaded"}), 400
 
-    print(f"[upload] plan_file: {plan_file.filename} -> {plan_target}")
-    print(f"[upload] excel_file: {excel_file.filename} -> {excel_target}")
+    plan_saved = False
+    excel_saved = False
+    for field, storage in files:
+        name = (storage.filename or "").lower()
+        if not name:
+            continue
+
+        if field == "plan_file" or name.endswith((".png", ".jpg", ".jpeg", ".pdf")):
+            target = runtime_dir / f"uploaded_layout{Path(name).suffix}"
+            storage.save(target)
+            print(f"[upload] {field}: {storage.filename} -> {target}")
+            if target.suffix.lower() == ".pdf":
+                try:
+                    first_page_to_layout_png(target, runtime_plan_path())
+                    plan_saved = True
+                except Exception as e:
+                    print(f"[upload] skip invalid layout PDF {target}: {e}")
+            else:
+                runtime_plan_path().write_bytes(target.read_bytes())
+                plan_saved = True
+            continue
+
+        if field == "excel_file" or name.endswith(".xlsx"):
+            target = runtime_excel_path()
+            storage.save(target)
+            print(f"[upload] {field}: {storage.filename} -> {target}")
+            excel_saved = True
+            continue
+
+        # Keep reference / gad / structure in runtime as additional context.
+        target = runtime_dir / storage.filename
+        storage.save(target)
+        print(f"[upload] {field}: {storage.filename} -> {target}")
+
+    if not plan_saved and runtime_plan_path().is_file():
+        plan_saved = True
+    if not excel_saved and runtime_excel_path().is_file():
+        excel_saved = True
+    if not (plan_saved and excel_saved):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Missing required layout and/or excel file after upload",
+                }
+            ),
+            400,
+        )
+
     try:
         payload = build_pipeline_output()
     except RuntimeError as e:

@@ -8,15 +8,17 @@ const statusEl = document.getElementById("status");
 const listEl = document.getElementById("equipment-list");
 const sceneMetaEl = document.getElementById("scene-meta");
 const containerEl = document.getElementById("three-container");
-const planFileInput = document.getElementById("plan-file-input");
+const layoutFileInput = document.getElementById("layout-file-input");
 const excelFileInput = document.getElementById("excel-file-input");
+const referenceFileInput = document.getElementById("reference-file-input");
+const gadFileInput = document.getElementById("gad-file-input");
 const uploadBtn = document.getElementById("load-project-btn");
 const loadedNamesEl = document.getElementById("loaded-filenames");
 const uploadMsgEl = document.getElementById("upload-feedback");
 const infoTagEl = document.getElementById("info-tag");
 const infoServiceEl = document.getElementById("info-service");
 const infoSizeEl = document.getElementById("info-size");
-const infoPosEl = document.getElementById("info-position");
+const infoPosEl = document.getElementById("info-pos");
 
 function setStatus(text, isError) {
   statusEl.textContent = text;
@@ -34,8 +36,12 @@ async function fetchJson(path) {
 
 async function uploadProjectFiles(planFile, excelFile) {
   const form = new FormData();
-  form.append("plan_file", planFile);
-  form.append("excel_file", excelFile);
+  if (planFile) form.append("layout_file", planFile);
+  if (excelFile) form.append("excel_file", excelFile);
+  const ref = referenceFileInput.files && referenceFileInput.files[0];
+  const gad = gadFileInput.files && gadFileInput.files[0];
+  if (ref) form.append("reference_file", ref);
+  if (gad) form.append("gad_file", gad);
   const res = await fetch(`${API_BASE}/api/upload`, {
     method: "POST",
     body: form,
@@ -78,11 +84,15 @@ function setUploadMessage(text, isError = false) {
 }
 
 function updateSelectedNames() {
-  const plan = planFileInput.files && planFileInput.files[0];
+  const plan = layoutFileInput.files && layoutFileInput.files[0];
   const excel = excelFileInput.files && excelFileInput.files[0];
+  const reference = referenceFileInput.files && referenceFileInput.files[0];
+  const gad = gadFileInput.files && gadFileInput.files[0];
   const planName = plan ? plan.name : "未选择";
   const excelName = excel ? excel.name : "未选择";
-  loadedNamesEl.textContent = `当前已加载：平面图（${planName}），Excel（${excelName}）`;
+  const referenceName = reference ? reference.name : "未选择";
+  const gadName = gad ? gad.name : "未选择";
+  loadedNamesEl.textContent = `当前已选择：图纸（${planName}），Excel（${excelName}），参考（${referenceName}），GAD（${gadName})`;
 }
 
 function num(v, fallback) {
@@ -318,13 +328,14 @@ function populateEquipmentMeshes(threeCtx, items) {
 const threeCtx = initThree();
 
 async function refreshScene() {
-  const [equipment, pipeline] = await Promise.all([
+  const [equipment, pipeline, statusDoc] = await Promise.all([
     fetchJson("/api/equipment"),
     fetchJson("/api/pipeline").catch(async () => {
       // Backward-compatible fallback when unified pipeline endpoint is unavailable.
       const scene = await fetchJson("/api/scene");
       return { scene, relations: {}, walls: { walls: [], rooms: [], center: [0, 0] } };
     }),
+    fetchJson("/api/status").catch(() => ({ missing: [], files: {} })),
   ]);
 
   renderEquipment(equipment);
@@ -341,7 +352,7 @@ async function refreshScene() {
       ? sceneDoc.walls.length
       : 0;
   const relCount = typeof relationsDoc === "object" ? Object.keys(relationsDoc).length : 0;
-  sceneMetaEl.textContent = `project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount}`;
+  sceneMetaEl.textContent = `project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"}`;
 
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);
@@ -359,10 +370,10 @@ async function refreshScene() {
 }
 
 async function handleUploadClick() {
-  const plan = planFileInput.files && planFileInput.files[0];
+  const plan = layoutFileInput.files && layoutFileInput.files[0];
   const excel = excelFileInput.files && excelFileInput.files[0];
-  if (!plan || !excel) {
-    setUploadMessage("请先选择平面图和 Excel 文件。", true);
+  if (!plan && !excel) {
+    setUploadMessage("请至少选择一个图纸或 Excel 文件。", true);
     return;
   }
   uploadBtn.disabled = true;
@@ -381,8 +392,10 @@ async function handleUploadClick() {
 }
 
 async function main() {
-  planFileInput.addEventListener("change", updateSelectedNames);
+  layoutFileInput.addEventListener("change", updateSelectedNames);
   excelFileInput.addEventListener("change", updateSelectedNames);
+  referenceFileInput.addEventListener("change", updateSelectedNames);
+  gadFileInput.addEventListener("change", updateSelectedNames);
   uploadBtn.addEventListener("click", handleUploadClick);
   updateSelectedNames();
   try {

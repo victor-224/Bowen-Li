@@ -1,71 +1,76 @@
-# Industrial Equipment Digital Twin
+# Industrial Equipment Digital Twin (Auto Pipeline)
 
-工业设备数字孪生管线：后端 Flask API、Excel 设备数据、场景 JSON、前端 2D/3D 预览（Three.js）。
+用户只需把文件放到 `data/`，系统自动识别并生成 3D 场景。
 
-## 源码与仓库
+## 核心特性
 
-- **你的 GitHub 仓库列表**：<https://github.com/victor-224?tab=repositories>
-- **本项目仓库**：<https://github.com/victor-224/Bowen-Li>
+- 自动文件分类（layout / excel / reference / gad / structure）
+- PDF 自动转图（layout page -> runtime/layout.png）
+- OCR 驱动设备定位（图纸决定坐标）
+- Excel 属性融合（Excel 只补属性）
+- 墙体/房间解析与空间关系计算
+- Three.js 实时渲染（localhost:3000）
 
-克隆到本地：
+## 数据目录（任意命名）
 
-```bash
-git clone https://github.com/victor-224/Bowen-Li.git
-cd Bowen-Li
-```
+把文件直接放进 `data/`，无需固定文件名：
 
-## 环境
+- 二维布局图：PDF / PNG / JPG
+- 设备清单：XLSX
+- 参考图：PDF
+- GAD：PDF
+- 结构/墙体图：PDF / PNG
 
-- Python 3.10+（建议）
-- 浏览器（前端通过本地 HTTP 访问，不要用 `file://` 直接打开 `index.html`）
+系统会自动分类并写入 `data/runtime/` 缓存文件。
+
+## 必须使用的启动命令
 
 安装依赖：
 
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
-## 本地运行 Web（两个端口）
-
-| 服务 | 地址 | 说明 |
-|------|------|------|
-| 后端 API | <http://127.0.0.1:5000> | Flask，提供 `/api/equipment`、`/api/scene` |
-| 前端页面 | <http://127.0.0.1:3000> | 静态文件 + 调用上面 API |
-
-**终端 1 — 启动后端**
+启动后端（5000）：
 
 ```bash
-python -m backend.api
+python3 -m backend.api
 ```
 
-**终端 2 — 启动前端**
+启动前端（3000）：
 
 ```bash
 cd frontend
-python -m http.server 3000 --bind 127.0.0.1
+python3 -m http.server 3000
 ```
 
-在浏览器打开：**<http://127.0.0.1:3000>**（或 `http://localhost:3000`）。
+打开浏览器：`http://localhost:3000`
 
-**一键脚本**（仓库根目录）：
+## 使用方式（零手动配置）
 
-```bash
-chmod +x scripts/dev.sh   # 仅需执行一次
-./scripts/dev.sh
-```
+1. 把文件丢进 `data/`
+2. 启动后端与前端
+3. 打开 `localhost:3000`
+4. 点击【加载项目】（或直接调用 API）
+5. 系统自动完成：
+   - 文件识别
+   - PDF 转图
+   - OCR 定位
+   - Excel 属性融合
+   - 墙体解析
+   - 关系计算
+   - 3D 场景更新
 
-同样用浏览器访问 **3000** 端口。
+## 主要 API
 
-## 数据文件
+- `GET /api/files`：当前识别文件
+- `GET /api/status`：文件完整性状态
+- `GET /api/scene`：场景数据
+- `GET /api/relations`：空间关系
+- `GET /api/walls`：墙体/房间/中心
+- `GET /api/pipeline`：统一总输出 `{scene, relations, walls}`
+- `POST /api/upload`：上传并自动重算
 
-- Excel：`data/Copy of Annexe 2_Equipment_liste_et_taille.xlsx`（后端读取，前端不直连文件）
-- 平面图：`data/plan_hd.png`（采点等功能用）
+## 说明
 
-## 其它命令
-
-- 引擎管线（无 UI）：`python -m backend.main`
-- 交互采点（需图形界面）：`python -m backend.pickpoint`
-
-## 许可
-
-以仓库内 LICENSE 为准（若未添加则待补充）。
+- 在无 GUI 服务器环境下，如果 OCR 无法识别且无法人工采点，接口会返回结构化错误信息。
