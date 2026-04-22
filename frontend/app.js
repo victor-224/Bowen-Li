@@ -61,10 +61,17 @@ function makeMaterial(seed) {
   });
 }
 
+function dims(row) {
+  const d = row.dimensions || {};
+  return {
+    diameter: num(row.diameter ?? d.diameter, 2000),
+    length: num(row.length ?? d.length, 3000),
+    height: num(row.height ?? d.height, 2000),
+  };
+}
+
 function buildMesh(geometryType, row) {
-  const d = num(row.diameter, 2000);
-  const L = num(row.length, 3000);
-  const H = num(row.height, 2000);
+  const { diameter: d, length: L, height: H } = dims(row);
 
   const gt = geometryType || "cylinder";
 
@@ -92,6 +99,9 @@ function buildMesh(geometryType, row) {
 }
 
 function positionMeters(pm) {
+  if (Array.isArray(pm) && pm.length >= 2) {
+    return new THREE.Vector3(num(pm[0], 0) * MM, 0, num(pm[1], 0) * MM);
+  }
   return new THREE.Vector3(
     num(pm?.x, 0) * MM,
     num(pm?.y, 0) * MM,

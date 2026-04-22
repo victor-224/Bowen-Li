@@ -1,16 +1,18 @@
-"""Phase 4: attach abstract 3D geometry labels (no mesh generation, no rendering)."""
+"""Phase 4: ensure geometry_type labels (non-rendered); canonical rules live in scene_spec."""
 
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Dict
 
+from backend.scene_spec import infer_geometry_type
+
 
 def geometry_engine(scene: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Map each equipment row to a simple geometry descriptor (non-rendered).
+    Ensure each equipment item has geometry_type using scene_spec inference when missing.
 
-    Mutates a deep copy of scene so callers can keep an immutable snapshot if needed.
+    Does not create meshes or modify dimensions.
     """
     out = deepcopy(scene)
     equipment = out.get("equipment")
@@ -20,16 +22,7 @@ def geometry_engine(scene: Dict[str, Any]) -> Dict[str, Any]:
     for e in equipment:
         if not isinstance(e, dict):
             continue
-        svc = e.get("service")
-        s = str(svc) if svc is not None else ""
-
-        if "Tank" in s:
-            e["geometry_type"] = "cylinder_vertical"
-        elif "Exchanger" in s:
-            e["geometry_type"] = "cylinder_horizontal"
-        elif "Compressor" in s:
-            e["geometry_type"] = "box"
-        else:
-            e["geometry_type"] = "cylinder"
+        if not e.get("geometry_type"):
+            e["geometry_type"] = infer_geometry_type(e.get("service"))
 
     return out
