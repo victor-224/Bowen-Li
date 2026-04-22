@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, MutableMapping, Optional
 
 import openpyxl
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 SHEET_NAME = "Equipment_list"
@@ -20,10 +20,32 @@ COL_LENGTH = 6
 COL_HEIGHT = 7
 
 _EXCEL_REL = Path("data") / "Copy of Annexe 2_Equipment_liste_et_taille.xlsx"
+_RUNTIME_DIR_REL = Path("data") / "runtime"
+_RUNTIME_PLAN_REL = _RUNTIME_DIR_REL / "plan.png"
+_RUNTIME_EXCEL_REL = _RUNTIME_DIR_REL / "equipment.xlsx"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def runtime_dir_path() -> Path:
+    return _repo_root() / _RUNTIME_DIR_REL
+
+
+def runtime_plan_path() -> Path:
+    return _repo_root() / _RUNTIME_PLAN_REL
+
+
+def runtime_excel_path() -> Path:
+    return _repo_root() / _RUNTIME_EXCEL_REL
 
 
 def _excel_path() -> Path:
-    return Path(__file__).resolve().parent.parent / _EXCEL_REL
+    runtime_excel = runtime_excel_path()
+    if runtime_excel.is_file():
+        return runtime_excel
+    return _repo_root() / _EXCEL_REL
 
 
 def _normalize_tag(value: object) -> str:
@@ -122,6 +144,34 @@ def get_scene() -> Any:
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
     return jsonify(build_scene(equipment))
+
+
+@app.post("/api/upload")
+def upload_project_files() -> Any:
+    plan_file = request.files.get("plan_file")
+    excel_file = request.files.get("excel_file")
+
+    if plan_file is None or excel_file is None:
+        return jsonify({"success": False, "error": "plan_file and excel_file are required"}), 400
+
+    plan_name = (plan_file.filename or "").lower()
+    excel_name = (excel_file.filename or "").lower()
+    if not plan_name.endswith((".png", ".jpg", ".jpeg")):
+        return jsonify({"success": False, "error": "plan_file must be png/jpg/jpeg"}), 400
+    if not excel_name.endswith(".xlsx"):
+        return jsonify({"success": False, "error": "excel_file must be .xlsx"}), 400
+
+    runtime_dir = runtime_dir_path()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    plan_target = runtime_plan_path()
+    excel_target = runtime_excel_path()
+    plan_file.save(plan_target)
+    excel_file.save(excel_target)
+
+    print(f"[upload] plan_file: {plan_file.filename} -> {plan_target}")
+    print(f"[upload] excel_file: {excel_file.filename} -> {excel_target}")
+    return jsonify({"success": True})
 
 
 if __name__ == "__main__":

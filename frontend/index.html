@@ -17,6 +17,27 @@
     h1 { font-size: 1.25rem; }
     h2 { font-size: 1rem; margin-top: 1.25rem; }
     #status { color: #555; font-size: 0.9rem; }
+    #upload-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.75rem;
+      align-items: end;
+      max-width: 58rem;
+      margin: 0.75rem 0 1rem;
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fafafa;
+    }
+    #upload-panel label { display: block; font-size: 0.9rem; margin-bottom: 0.2rem; }
+    #upload-panel input, #upload-panel button {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.4rem;
+      font-size: 0.92rem;
+    }
+    #upload-feedback { font-size: 0.9rem; color: #2b6f2b; }
+    #loaded-filenames { font-size: 0.88rem; color: #444; margin-top: 0.4rem; }
     #equipment-list { list-style: none; padding: 0; max-width: 48rem; }
     #equipment-list li { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
     #equipment-list .tag { font-weight: 600; margin-right: 0.5rem; }
@@ -38,6 +59,22 @@
 <body>
   <h1>Industrial Digital Twin</h1>
   <p id="status">Loading…</p>
+  <div id="upload-panel">
+    <div>
+      <label for="plan-file-input">选择平面图文件</label>
+      <input id="plan-file-input" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg">
+    </div>
+    <div>
+      <label for="excel-file-input">选择 Excel 文件</label>
+      <input id="excel-file-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <button id="load-project-btn" type="button">加载项目</button>
+    </div>
+  </div>
+  <p id="upload-feedback"></p>
+  <p id="loaded-filenames">当前已加载：平面图（未选择），Excel（未选择）</p>
 
   <h2>Equipment (from /api/equipment)</h2>
   <ul id="equipment-list"></ul>

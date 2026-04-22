@@ -8,6 +8,11 @@ const statusEl = document.getElementById("status");
 const listEl = document.getElementById("equipment-list");
 const sceneMetaEl = document.getElementById("scene-meta");
 const containerEl = document.getElementById("three-container");
+const planFileInput = document.getElementById("plan-file-input");
+const excelFileInput = document.getElementById("excel-file-input");
+const uploadBtn = document.getElementById("load-project-btn");
+const loadedNamesEl = document.getElementById("loaded-filenames");
+const uploadMsgEl = document.getElementById("upload-feedback");
 
 function setStatus(text, isError) {
   statusEl.textContent = text;
@@ -21,6 +26,22 @@ async function fetchJson(path) {
     throw new Error(`${path} ${res.status}: ${errBody}`);
   }
   return res.json();
+}
+
+async function uploadProjectFiles(planFile, excelFile) {
+  const form = new FormData();
+  form.append("plan_file", planFile);
+  form.append("excel_file", excelFile);
+  const res = await fetch(`${API_BASE}/api/upload`, {
+    method: "POST",
+    body: form,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.success !== true) {
+    const reason = body.error || `HTTP ${res.status}`;
+    throw new Error(`Upload failed: ${reason}`);
+  }
+  return body;
 }
 
 function renderEquipment(equipment) {
@@ -45,6 +66,19 @@ function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s;
   return div.innerHTML;
+}
+
+function setUploadMessage(text, isError = false) {
+  uploadMsgEl.textContent = text;
+  uploadMsgEl.className = isError ? "error" : "";
+}
+
+function updateSelectedNames() {
+  const plan = planFileInput.files && planFileInput.files[0];
+  const excel = excelFileInput.files && excelFileInput.files[0];
+  const planName = plan ? plan.name : "未选择";
+  const excelName = excel ? excel.name : "未选择";
+  loadedNamesEl.textContent = `当前已加载：平面图（${planName}），Excel（${excelName}）`;
 }
 
 function num(v, fallback) {
@@ -192,32 +226,61 @@ function populateEquipmentMeshes(equipmentGroup, items) {
 
 const threeCtx = initThree();
 
-async function main() {
+async function refreshScene() {
+  const [equipment, sceneDoc] = await Promise.all([
+    fetchJson("/api/equipment"),
+    fetchJson("/api/scene"),
+  ]);
+
+  renderEquipment(equipment);
+
+  const meta = sceneDoc.meta || {};
+  const items = sceneDoc.equipment || [];
+  sceneMetaEl.textContent = `project: ${meta.project ?? "—"} · 3D items: ${items.length} · walls: ${(sceneDoc.walls || []).length}`;
+
+  populateEquipmentMeshes(threeCtx.equipmentGroup, items);
+
+  const box = new THREE.Box3().setFromObject(threeCtx.equipmentGroup);
+  if (!box.isEmpty()) {
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const dist = Math.max(size.x, size.y, size.z) * 1.8;
+    threeCtx.camera.position.set(center.x + dist * 0.6, center.y + dist * 0.45, center.z + dist * 0.6);
+    threeCtx.camera.lookAt(center);
+    threeCtx.controls.target.copy(center);
+    threeCtx.controls.update();
+  }
+}
+
+async function handleUploadClick() {
+  const plan = planFileInput.files && planFileInput.files[0];
+  const excel = excelFileInput.files && excelFileInput.files[0];
+  if (!plan || !excel) {
+    setUploadMessage("请先选择平面图和 Excel 文件。", true);
+    return;
+  }
+  uploadBtn.disabled = true;
+  setUploadMessage("上传中...");
   try {
-    const [equipment, sceneDoc] = await Promise.all([
-      fetchJson("/api/equipment"),
-      fetchJson("/api/scene"),
-    ]);
+    await uploadProjectFiles(plan, excel);
+    await refreshScene();
+    setUploadMessage("success: 项目文件加载成功。");
+    setStatus("Connected to API.");
+  } catch (e) {
+    setUploadMessage(String(e.message || e), true);
+    setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
+  } finally {
+    uploadBtn.disabled = false;
+  }
+}
 
-    renderEquipment(equipment);
-
-    const meta = sceneDoc.meta || {};
-    const items = sceneDoc.equipment || [];
-    sceneMetaEl.textContent = `project: ${meta.project ?? "—"} · 3D items: ${items.length} · walls: ${(sceneDoc.walls || []).length}`;
-
-    populateEquipmentMeshes(threeCtx.equipmentGroup, items);
-
-    const box = new THREE.Box3().setFromObject(threeCtx.equipmentGroup);
-    if (!box.isEmpty()) {
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-      const dist = Math.max(size.x, size.y, size.z) * 1.8;
-      threeCtx.camera.position.set(center.x + dist * 0.6, center.y + dist * 0.45, center.z + dist * 0.6);
-      threeCtx.camera.lookAt(center);
-      threeCtx.controls.target.copy(center);
-      threeCtx.controls.update();
-    }
-
+async function main() {
+  planFileInput.addEventListener("change", updateSelectedNames);
+  excelFileInput.addEventListener("change", updateSelectedNames);
+  uploadBtn.addEventListener("click", handleUploadClick);
+  updateSelectedNames();
+  try {
+    await refreshScene();
     setStatus("Connected to API.");
   } catch (e) {
     setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
