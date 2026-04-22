@@ -8,6 +8,7 @@ from typing import Any, Dict, List, MutableMapping, Optional
 import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from backend.relations import build_relations
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -152,6 +153,21 @@ def get_scene() -> Any:
         return jsonify({"error": str(e)}), 500
     try:
         return jsonify(build_scene(equipment))
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/relations")
+def get_relations() -> Any:
+    try:
+        equipment = load_equipment_from_excel()
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        scene = build_scene(equipment)
+        return jsonify(build_relations(scene))
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
 
