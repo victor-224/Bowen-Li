@@ -15,6 +15,68 @@ en une scène 3D interactive de jumeau numérique.
 
 ---
 
+## 🧭 System Flow Diagram / 系统流程图
+
+```mermaid
+flowchart TD
+  dataInput[DataFolderFiles] --> fileClassifier[FileClassifier]
+  fileClassifier --> pdfLoader[PdfLoader]
+  fileClassifier --> excelLoader[ExcelLoader]
+  pdfLoader --> locator[LocatorOCR]
+  locator --> sceneBuilder[SceneBuilder]
+  excelLoader --> sceneBuilder
+  sceneBuilder --> wallsEngine[WallsEngine]
+  sceneBuilder --> relationsEngine[RelationsEngine]
+  sceneBuilder --> layoutGraph[LayoutGraphBuilder]
+  wallsEngine --> pipelineApi[PipelineAPI]
+  relationsEngine --> pipelineApi
+  layoutGraph --> pipelineApi
+  pipelineApi --> frontend[ThreeJSFrontend]
+```
+
+---
+
+## 🏛️ Module Architecture / 模块架构图
+
+```mermaid
+flowchart LR
+  subgraph backend [Backend]
+    api[backend.api]
+    classifier[backend.file_classifier]
+    loader[backend.pdf_loader]
+    locatorM[backend.locator]
+    wallsM[backend.walls]
+    relationsM[backend.relations]
+    graphM[backend.layout_graph]
+    sceneM[backend.engines.scene]
+  end
+
+  subgraph frontend [Frontend]
+    html[frontend.index]
+    js[frontend.app]
+  end
+
+  subgraph aiPipeline [AI_Pipeline]
+    ocr[OCR]
+    semantic[SemanticFusion]
+  end
+
+  classifier --> loader
+  loader --> ocr
+  ocr --> locatorM
+  locatorM --> semantic
+  semantic --> sceneM
+  wallsM --> sceneM
+  relationsM --> graphM
+  sceneM --> graphM
+  graphM --> api
+  api --> js
+  html --> js
+  js --> html
+```
+
+---
+
 ## ✅ Current System Features / 当前系统能力
 
 ### 1️⃣ 智能文件识别系统（Zero naming dependency）
@@ -209,6 +271,74 @@ python3 -m http.server 3000
 
 - `GET /api/pipeline`  
   统一总输出（scene + relations + walls + layout_graph）
+
+---
+
+## 🧩 API Response Cards / API响应示例卡片
+
+### `GET /api/pipeline`
+
+```json
+{
+  "scene": [
+    {
+      "tag": "B200",
+      "service": "Reactor / Settler",
+      "position_mm": [8210.4, 12250.2],
+      "dimensions": { "diameter": 5300, "length": null, "height": 14200 },
+      "confidence": 0.93
+    }
+  ],
+  "relations": {
+    "B200_left_of_P001A": true,
+    "distance_B200_P001A": 3.2
+  },
+  "walls": {
+    "walls": [],
+    "rooms": [],
+    "center": [8750.0, 8750.0]
+  },
+  "layout_graph": {
+    "nodes": [],
+    "edges": [],
+    "zones": [],
+    "constraints": []
+  }
+}
+```
+
+### `GET /api/layout_graph`
+
+```json
+{
+  "nodes": [
+    {
+      "id": "B200",
+      "type": "tank",
+      "service_system": "reactor_settler",
+      "process_role": "storage_reaction",
+      "zone": "Z1",
+      "position_mm": [8210.4, 12250.2],
+      "confidence": 0.93
+    }
+  ],
+  "edges": [
+    { "source": "B200", "target": "P001A", "type": "left_of", "weight": 1.0 },
+    { "source": "B200", "target": "P001A", "type": "connected_process", "weight": 0.8 }
+  ],
+  "zones": [
+    { "zone_id": "Z1", "type": "process_unit", "devices": ["B200", "P001A"], "center": [8200, 12100] }
+  ],
+  "constraints": [
+    { "type": "zone_capacity", "zone_id": "Z1", "max_devices": 12 }
+  ],
+  "walls": {
+    "walls": [],
+    "rooms": [],
+    "center": [8750.0, 8750.0]
+  }
+}
+```
 
 ---
 
