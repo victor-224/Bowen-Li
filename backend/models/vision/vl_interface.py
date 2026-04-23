@@ -5,20 +5,16 @@ Isolated: not used by the pipeline, API, or OCR. Never raises to callers.
 
 from __future__ import annotations
 
-import base64
-import json
-import logging
 import os
+import json
+import base64
+import logging
 import socket
 from typing import Any, Dict, List, Optional, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-# Required: shared LM Studio adapter (this module also POSTs one model at a time
-# to enforce vision-only fallbacks, matching ``call_lmstudio_model``'s local URL).
-from backend.llm.lmstudio_client import call_lmstudio_model
-
-LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
+from backend.llm.lmstudio_client import call_lmstudio_model, LM_STUDIO_URL
 
 logger = logging.getLogger("industrial_digital_twin.vision")
 
