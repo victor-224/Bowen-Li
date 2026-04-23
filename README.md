@@ -174,6 +174,17 @@ start_demo.bat
 
 - `http://localhost:3000`
 
+### Upload categories (demo UX) / Catégories d’upload (UX démo) / 上传分类说明
+
+- **Required / Requis / 必填**
+  - `layout` (PDF/PNG/JPG/JPEG): floor/layout drawing used by OCR + wall parsing
+  - `excel` (XLSX): equipment attributes table
+- **Optional / Optionnel / 可选**
+  - `reference` (PDF): additional technical docs, consumed by Phase C P&ID linking
+  - `structure` (PDF/PNG/JPG/JPEG): reserved for structure-specific parsing extensions
+- **Developer-only (hidden in UI) / Développeur seulement (masqué UI) / 开发项（前端隐藏）**
+  - `gad` (PDF): currently used only by backend classifier/P&ID helper, not required for demo path
+
 ### Manual fallback / Démarrage manuel / 手动启动方式
 
 ```bash
@@ -204,6 +215,8 @@ python -m http.server 3000
 - `GET /api/files` — 🇨🇳 当前识别文件 / 🇫🇷 fichiers classifiés
 - `GET /api/status` — 🇨🇳 完整性状态 / 🇫🇷 état de complétude
 - `POST /api/upload` — 🇨🇳 上传并重算 / 🇫🇷 upload + recalcul
+- `GET /api/task/<task_id>` — 🇨🇳 后台任务状态 / 🇫🇷 statut de tâche asynchrone
+- `GET /api/task/latest` — 🇨🇳 最近一次任务状态 / 🇫🇷 dernier statut de tâche
 
 ### 语义接口 / API sémantiques / Semantic APIs
 

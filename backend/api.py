@@ -16,6 +16,7 @@ from backend.layout_graph import build_layout_graph
 from backend.multiplant_registry import list_plants, register_snapshot
 from backend.observability import audit_event, finish_trace, get_observability, observe_operation, start_trace
 from backend.pid_integration import build_pid_links
+from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 
 SHEET_NAME = "Equipment_list"
@@ -32,6 +33,9 @@ _EXCEL_REL = Path("data") / "Copy of Annexe 2_Equipment_liste_et_taille.xlsx"
 _RUNTIME_DIR_REL = Path("data") / "runtime"
 _RUNTIME_PLAN_REL = _RUNTIME_DIR_REL / "plan.png"
 _RUNTIME_EXCEL_REL = _RUNTIME_DIR_REL / "equipment.xlsx"
+MAX_UPLOAD_BYTES = 80 * 1024 * 1024  # 80MB soft limit for demo stability
+PIPELINE_TIMEOUT_SECONDS = 120
+_RUNTIME_STATE = RuntimeState()
 
 
 def _repo_root() -> Path:
@@ -66,6 +70,45 @@ def _path_like_to_json(value: Any) -> Any:
 
 def _error_response(message: str, status_code: int = 500) -> Any:
     return jsonify({"success": False, "error": message}), status_code
+
+
+def _pipeline_signature() -> str:
+    classified = classify_files(data_dir_path())
+    paths = {
+        "runtime_plan": runtime_plan_path() if runtime_plan_path().is_file() else None,
+        "runtime_excel": runtime_excel_path() if runtime_excel_path().is_file() else None,
+        "layout": Path(str(classified["layout"])) if classified.get("layout") else None,
+        "excel": Path(str(classified["excel"])) if classified.get("excel") else None,
+        "reference": Path(str(classified["reference"])) if classified.get("reference") else None,
+        "gad": Path(str(classified["gad"])) if classified.get("gad") else None,
+        "structure": Path(str(classified["structure"])) if classified.get("structure") else None,
+    }
+    return _RUNTIME_STATE.build_signature(paths)
+
+
+def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    signature = _pipeline_signature()
+    cached = _RUNTIME_STATE.get_cached_payload(signature)
+    if cached is not None:
+        return cached
+    payload = build_pipeline_output(equipment)
+    _RUNTIME_STATE.set_cached_payload(signature, payload)
+    return payload
+
+
+def _classify_pipeline_error(message: str) -> str:
+    m = (message or "").lower()
+    if "sheet" in m and "equipment_list" in m:
+        return "Excel format invalid: sheet 'Equipment_list' is required."
+    if "excel not found" in m:
+        return "No Excel detected. Upload a valid .xlsx equipment list."
+    if "cannot read plan image" in m or "plan image not found" in m:
+        return "No valid layout image detected. Upload a readable PDF/PNG/JPG layout."
+    if "no positions detected" in m:
+        return "OCR failed to detect equipment tags from layout."
+    if "upload too large" in m:
+        return "Uploaded file is too large for demo mode."
+    return message
 
 
 def _excel_path() -> Path:
@@ -252,7 +295,8 @@ def get_scene() -> Any:
     except ValueError as e:
         return _error_response(str(e), 500)
     try:
-        return jsonify(build_scene(equipment))
+        pipeline = _get_or_build_pipeline_sync(equipment)
+        return jsonify({"equipment": pipeline.get("scene", []), "walls": pipeline.get("walls", {}).get("walls", [])})
     except RuntimeError as e:
         return _error_response(str(e), 500)
 
@@ -266,8 +310,8 @@ def get_relations() -> Any:
     except ValueError as e:
         return _error_response(str(e), 500)
     try:
-        scene = build_scene(equipment)
-        return jsonify(build_relations(scene))
+        payload = _get_or_build_pipeline_sync(equipment)
+        return jsonify(payload.get("relations", {}))
     except RuntimeError as e:
         return _error_response(str(e), 500)
 
@@ -303,7 +347,7 @@ def get_pipeline() -> Any:
     except ValueError as e:
         return _error_response(str(e), 500)
     try:
-        return jsonify(build_pipeline_output(equipment))
+        return jsonify(_get_or_build_pipeline_sync(equipment))
     except RuntimeError as e:
         return _error_response(str(e), 500)
     except FileNotFoundError as e:
@@ -319,7 +363,7 @@ def get_layout_graph() -> Any:
     except ValueError as e:
         return _error_response(str(e), 500)
     try:
-        payload = build_pipeline_output(equipment)
+        payload = _get_or_build_pipeline_sync(equipment)
         return jsonify(payload.get("layout_graph", {"nodes": [], "edges": [], "zones": [], "constraints": []}))
     except RuntimeError as e:
         return _error_response(str(e), 500)
@@ -332,7 +376,7 @@ def get_layout_graph() -> Any:
 @app.get("/api/pid_links")
 def get_pid_links() -> Any:
     try:
-        payload = build_pipeline_output()
+        payload = _get_or_build_pipeline_sync()
         return jsonify(payload.get("phase_c", {}).get("pid_links", {}))
     except (RuntimeError, FileNotFoundError, ValueError) as e:
         return _error_response(str(e), 500)
@@ -341,7 +385,7 @@ def get_pid_links() -> Any:
 @app.get("/api/topology")
 def get_topology() -> Any:
     try:
-        payload = build_pipeline_output()
+        payload = _get_or_build_pipeline_sync()
         return jsonify(payload.get("phase_c", {}).get("topology_optimization", {}))
     except (RuntimeError, FileNotFoundError, ValueError) as e:
         return _error_response(str(e), 500)
@@ -365,7 +409,9 @@ def get_observability_data() -> Any:
 @app.get("/api/walls")
 def get_walls() -> Any:
     try:
-        return jsonify(parse_walls_and_rooms(plan_image_path()))
+        payload = _get_or_build_pipeline_sync()
+        walls_doc = payload.get("walls", {"walls": [], "rooms": [], "center": [0.0, 0.0]})
+        return jsonify(walls_doc)
     except FileNotFoundError as e:
         return _error_response(str(e), 404)
     except RuntimeError as e:
@@ -378,6 +424,10 @@ def upload_project_files() -> Any:
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
     # Support explicit typed fields and arbitrary multi-file uploads.
+    content_length = request.content_length or 0
+    if content_length > MAX_UPLOAD_BYTES:
+        return _error_response(f"Upload too large (>{MAX_UPLOAD_BYTES // (1024 * 1024)}MB)", 413)
+
     files = list(request.files.items(multi=True))
     if not files:
         return _error_response("No files uploaded", 400)
@@ -392,13 +442,12 @@ def upload_project_files() -> Any:
         if field == "plan_file" or name.endswith((".png", ".jpg", ".jpeg", ".pdf")):
             target = runtime_dir / f"uploaded_layout{Path(name).suffix}"
             storage.save(target)
-            print(f"[upload] {field}: {storage.filename} -> {target}")
             if target.suffix.lower() == ".pdf":
                 try:
                     first_page_to_layout_png(target, runtime_plan_path())
                     plan_saved = True
                 except Exception as e:
-                    print(f"[upload] skip invalid layout PDF {target}: {e}")
+                    return _error_response(f"Invalid layout PDF: {e}", 400)
             else:
                 runtime_plan_path().write_bytes(target.read_bytes())
                 plan_saved = True
@@ -407,14 +456,23 @@ def upload_project_files() -> Any:
         if field == "excel_file" or name.endswith(".xlsx"):
             target = runtime_excel_path()
             storage.save(target)
-            print(f"[upload] {field}: {storage.filename} -> {target}")
             excel_saved = True
             continue
 
-        # Keep reference / gad / structure in runtime as additional context.
-        target = runtime_dir / storage.filename
-        storage.save(target)
-        print(f"[upload] {field}: {storage.filename} -> {target}")
+        if field == "reference_file":
+            target = runtime_dir / Path(storage.filename).name
+            storage.save(target)
+            continue
+
+        if field == "structure_file":
+            target = runtime_dir / f"uploaded_structure{Path(name).suffix}"
+            storage.save(target)
+            continue
+
+        if field == "gad_file":
+            target = runtime_dir / Path(storage.filename).name
+            storage.save(target)
+            continue
 
     if not plan_saved and runtime_plan_path().is_file():
         plan_saved = True
@@ -423,15 +481,70 @@ def upload_project_files() -> Any:
     if not (plan_saved and excel_saved):
         return _error_response("Missing required layout and/or excel file after upload", 400)
 
-    try:
-        payload = build_pipeline_output()
-    except RuntimeError as e:
-        return _error_response(str(e), 500)
-    except FileNotFoundError as e:
-        return _error_response(str(e), 404)
-    except ValueError as e:
-        return _error_response(str(e), 500)
-    return jsonify({"success": True, **payload})
+    task_id = _RUNTIME_STATE.new_task("Upload received")
+    signature = _pipeline_signature()
+    _RUNTIME_STATE.submit_pipeline_task(task_id, input_signature=signature, builder=lambda: build_pipeline_output())
+    return jsonify({"success": True, "task_id": task_id, "message": "Processing started"})
+
+
+@app.get("/api/task/<task_id>")
+def get_task_status(task_id: str) -> Any:
+    rec = _RUNTIME_STATE.get_task(task_id)
+    if rec is None:
+        return _error_response("Task not found", 404)
+    return jsonify({"success": True, **rec})
+
+
+@app.get("/api/task/latest")
+def get_latest_task_status() -> Any:
+    rec = _RUNTIME_STATE.latest_task()
+    if rec is None:
+        return jsonify({"success": True, "status": "idle", "progress": 0, "message": "No task yet"})
+    return jsonify({"success": True, **rec})
+
+
+@app.get("/api/upload/schema")
+def get_upload_schema() -> Any:
+    return jsonify(
+        {
+            "required": [
+                {
+                    "field": "plan_file",
+                    "label": "Layout Drawing",
+                    "accept": [".pdf", ".png", ".jpg", ".jpeg"],
+                    "used_by": ["pdf_loader", "locator", "walls", "scene_engine"],
+                },
+                {
+                    "field": "excel_file",
+                    "label": "Equipment Excel",
+                    "accept": [".xlsx"],
+                    "used_by": ["excel_parser", "layout_graph", "scene_engine"],
+                },
+            ],
+            "optional": [
+                {
+                    "field": "reference_file",
+                    "label": "Reference Docs",
+                    "accept": [".pdf"],
+                    "used_by": ["pid_integration"],
+                },
+                {
+                    "field": "structure_file",
+                    "label": "Structure Drawing",
+                    "accept": [".pdf", ".png", ".jpg", ".jpeg"],
+                    "used_by": ["file_classifier", "walls (future weighting)"],
+                },
+            ],
+            "developer_only": [
+                {
+                    "field": "gad_file",
+                    "label": "GAD Typical",
+                    "accept": [".pdf"],
+                    "used_by": ["pid_integration (optional)"],
+                }
+            ],
+        }
+    )
 
 
 if __name__ == "__main__":

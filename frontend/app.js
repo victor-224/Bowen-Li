@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-const API_BASE = "http://127.0.0.1:5000";
+const API_BASE = "http://localhost:5000";
 const MM = 0.001;
 
 const statusEl = document.getElementById("status");
@@ -15,6 +15,8 @@ const gadFileInput = document.getElementById("gad-file-input");
 const uploadBtn = document.getElementById("load-project-btn");
 const loadedNamesEl = document.getElementById("loaded-filenames");
 const uploadMsgEl = document.getElementById("upload-feedback");
+const processStatusEl = document.getElementById("process-status");
+const logPanelEl = document.getElementById("log-panel");
 const infoTagEl = document.getElementById("info-tag");
 const infoServiceEl = document.getElementById("info-service");
 const infoSizeEl = document.getElementById("info-size");
@@ -29,6 +31,17 @@ function setStatus(text, isError) {
   statusEl.className = isError ? "error" : "";
 }
 
+function pushLog(message, level = "info") {
+  const ts = new Date().toLocaleTimeString();
+  const line = `[${ts}] [${level.toUpperCase()}] ${message}`;
+  logPanelEl.textContent = `${line}\n${logPanelEl.textContent}`.slice(0, 16000);
+}
+
+function setProcessStatus(message, isError = false) {
+  processStatusEl.textContent = message;
+  processStatusEl.className = isError ? "error" : "";
+}
+
 async function fetchJson(path) {
   const res = await fetch(`${API_BASE}${path}`);
   const body = await res.json().catch(async () => ({ error: await res.text() }));
@@ -40,7 +53,7 @@ async function fetchJson(path) {
 
 async function uploadProjectFiles(planFile, excelFile) {
   const form = new FormData();
-  if (planFile) form.append("layout_file", planFile);
+  if (planFile) form.append("plan_file", planFile);
   if (excelFile) form.append("excel_file", excelFile);
   const ref = referenceFileInput.files && referenceFileInput.files[0];
   const gad = gadFileInput.files && gadFileInput.files[0];
@@ -56,6 +69,22 @@ async function uploadProjectFiles(planFile, excelFile) {
     throw new Error(`Upload failed: ${reason}`);
   }
   return body;
+}
+
+async function pollTaskUntilDone(taskId, timeoutMs = 180000) {
+  const t0 = Date.now();
+  let lastMessage = "Starting task";
+  while (Date.now() - t0 < timeoutMs) {
+    const task = await fetchJson(`/api/task/${encodeURIComponent(taskId)}`);
+    lastMessage = `${task.message || task.status} (${task.progress || 0}%)`;
+    setProcessStatus(lastMessage);
+    if (task.status === "done") return task;
+    if (task.status === "error") {
+      throw new Error(task.error || "Processing failed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+  throw new Error(`Processing timeout after ${Math.round(timeoutMs / 1000)}s (${lastMessage})`);
 }
 
 function renderEquipment(equipment) {
@@ -390,14 +419,29 @@ async function handleUploadClick() {
   }
   uploadBtn.disabled = true;
   setUploadMessage("上传中...");
+  setProcessStatus("Uploading files...");
   try {
-    await uploadProjectFiles(plan, excel);
+    const upload = await uploadProjectFiles(plan, excel);
+    pushLog(`Upload accepted, task ${upload.task_id || "N/A"}`);
+    if (upload.task_id) {
+      await pollTaskUntilDone(upload.task_id);
+    }
     await refreshScene();
     setUploadMessage("success: 项目文件加载成功。");
+    setProcessStatus("Processing complete");
     setStatus("Connected to API.");
   } catch (e) {
-    setUploadMessage(String(e.message || e), true);
-    setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
+    const msg = String(e.message || e);
+    let userMsg = msg;
+    if (msg.includes("No positions detected")) userMsg = "OCR failed: no equipment tags detected in layout.";
+    else if (msg.toLowerCase().includes("sheet")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
+    else if (msg.toLowerCase().includes("excel not found")) userMsg = "No Excel detected. Please upload a valid .xlsx file.";
+    else if (msg.toLowerCase().includes("plan image not found")) userMsg = "No layout detected. Please upload plan drawing.";
+    else if (msg.toLowerCase().includes("timeout")) userMsg = `Processing timeout. ${msg}`;
+    setUploadMessage(userMsg, true);
+    setProcessStatus(userMsg, true);
+    pushLog(userMsg, "error");
+    setStatus(`Backend/API error (${API_BASE}): ${userMsg}`, true);
   } finally {
     uploadBtn.disabled = false;
   }
@@ -413,8 +457,12 @@ async function main() {
   try {
     await refreshScene();
     setStatus("Connected to API.");
+    setProcessStatus("Idle");
+    pushLog("Frontend initialized and connected");
   } catch (e) {
     setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
+    setProcessStatus("Backend offline", true);
+    pushLog(`Backend connection failed: ${e.message}`, "error");
   }
 }
 
