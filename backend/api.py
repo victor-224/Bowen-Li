@@ -193,13 +193,31 @@ def _classify_pipeline_error(message: str) -> str:
         return "Excel format invalid: sheet 'Equipment_list' is required."
     if "excel not found" in m:
         return "No Excel detected. Upload a valid .xlsx equipment list."
-    if "cannot read plan image" in m or "plan image not found" in m:
-        return "No valid layout image detected. Upload a readable PDF/PNG/JPG layout."
+    if "[scene_error] plan.png missing" in m or "plan image not found" in m:
+        return "Scene generation failed due to missing plan.png asset."
+    if "[scene_error] plan.png is corrupted" in m or "cannot read plan image" in m:
+        return "Scene generation failed due to corrupted plan.png asset."
     if "no positions detected" in m:
         return "OCR failed to detect equipment tags from layout."
     if "upload too large" in m:
         return "Uploaded file is too large for demo mode."
     return message
+
+
+def _classify_pipeline_error_code(message: str, default: str = "PIPELINE_ERROR") -> tuple[str, str]:
+    """Map raw exception message to (error_code, stage)."""
+    m = (message or "").lower()
+    if "[scene_error] plan.png missing" in m or "plan image not found" in m:
+        return "MISSING_PLAN_IMAGE", TASK_RENDERING_SCENE
+    if "[scene_error] plan.png is corrupted" in m or "cannot read plan image" in m:
+        return "CORRUPTED_PLAN_IMAGE", TASK_RENDERING_SCENE
+    if "sheet" in m and "equipment_list" in m:
+        return "INVALID_EXCEL", TASK_VALIDATING
+    if "excel not found" in m or "file is not a zip file" in m:
+        return "INVALID_EXCEL", TASK_VALIDATING
+    if "no positions detected" in m:
+        return "OCR_FAILED", TASK_PROCESSING_OCR
+    return default, TASK_VALIDATING
 
 
 def _excel_path() -> Path:
@@ -436,13 +454,18 @@ def get_scene() -> Any:
         equipment = load_equipment_from_excel()
     except FileNotFoundError as e:
         return _error_response(str(e), 404)
-    except ValueError as e:
-        return _error_response(str(e), 500)
+    except Exception as e:  # noqa: BLE001 - structured error output
+        code, stage = _classify_pipeline_error_code(str(e))
+        return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 400)
     try:
         pipeline = _get_or_build_pipeline_sync(equipment)
         return jsonify({"equipment": pipeline.get("scene", []), "walls": pipeline.get("walls", {}).get("walls", [])})
-    except RuntimeError as e:
-        return _error_response(str(e), 500)
+    except FileNotFoundError as e:
+        code, stage = _classify_pipeline_error_code(str(e))
+        return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 400)
+    except Exception as e:  # noqa: BLE001 - structured error output
+        code, stage = _classify_pipeline_error_code(str(e))
+        return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 500)
 
 
 @app.get("/api/relations")
@@ -654,6 +677,13 @@ def get_task_status(task_id: str) -> Any:
     if rec is None:
         return _error_response("Task not found", 404)
     if rec.get("status") == TASK_FAILED:
+        raw_message = str(rec.get("error") or "")
+        existing_code = str(rec.get("error_code") or "")
+        stored_stage = str(rec.get("stage") or "")
+        inferred_code, inferred_stage = _classify_pipeline_error_code(raw_message)
+        # Prefer specific inferred stage/code if backend raw message reveals a stage-specific failure.
+        code = inferred_code if inferred_code != "PIPELINE_ERROR" else (existing_code or inferred_code)
+        stage = inferred_stage if inferred_code != "PIPELINE_ERROR" else (stored_stage or inferred_stage)
         return jsonify(
             {
                 "success": False,
@@ -662,9 +692,9 @@ def get_task_status(task_id: str) -> Any:
                 "progress": rec.get("progress"),
                 "message": rec.get("message"),
                 "error": _pipeline_error(
-                    str(rec.get("error_code") or "PIPELINE_ERROR"),
-                    _classify_pipeline_error(str(rec.get("error") or "")),
-                    str(rec.get("stage") or TASK_FAILED),
+                    code or "PIPELINE_ERROR",
+                    _classify_pipeline_error(raw_message),
+                    stage or TASK_FAILED,
                 ),
                 "created_at": rec.get("created_at"),
                 "updated_at": rec.get("updated_at"),
