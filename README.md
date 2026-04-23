@@ -150,30 +150,37 @@ Le système classe automatiquement et écrit le cache dans `data/runtime/`.
 
 ---
 
-## 🚀 Quick Start / Démarrage rapide / 快速启动（python3）
+## 🚀 Quick Start (Windows) / Démarrage rapide (Windows) / Windows 快速启动
 
 ### 1) Install dependencies / Installer les dépendances / 安装依赖
 
 ```bash
-python3 -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
-### 2) Start backend (5000) / Démarrer le backend / 启动后端
+### 2) Start demo (recommended) / Démarrer la démo (recommandé) / 启动演示（推荐）
 
 ```bash
-python3 -m backend.api
+python run.py
 ```
 
-### 3) Start frontend (3000) / Démarrer le frontend / 启动前端
+Or double click / Ou double-cliquer / 或双击：
 
-```bash
-cd frontend
-python3 -m http.server 3000
+```text
+start_demo.bat
 ```
 
-### 4) Open browser / Ouvrir le navigateur / 打开浏览器
+### 3) Open browser / Ouvrir le navigateur / 打开浏览器
 
 - `http://localhost:3000`
+
+### Manual fallback / Démarrage manuel / 手动启动方式
+
+```bash
+python -m backend.api
+cd frontend
+python -m http.server 3000
+```
 
 ---
 

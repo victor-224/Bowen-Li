@@ -20,7 +20,8 @@ const infoServiceEl = document.getElementById("info-service");
 const infoSizeEl = document.getElementById("info-size");
 const infoPosEl = document.getElementById("info-pos");
 const infoZoneEl = document.getElementById("info-zone");
-const infoFlowEl = document.getElementById("info-flow");
+const infoUpstreamEl = document.getElementById("info-upstream");
+const infoDownstreamEl = document.getElementById("info-downstream");
 const infoNearestEl = document.getElementById("info-nearest");
 
 function setStatus(text, isError) {
@@ -207,6 +208,10 @@ function updateInfoPanel(row) {
     infoServiceEl.textContent = "—";
     infoSizeEl.textContent = "—";
     infoPosEl.textContent = "—";
+    infoZoneEl.textContent = "—";
+    infoUpstreamEl.textContent = "—";
+    infoDownstreamEl.textContent = "—";
+    infoNearestEl.textContent = "—";
     return;
   }
   const d = row.dimensions || {};
@@ -218,6 +223,10 @@ function updateInfoPanel(row) {
   )} · H ${num(row.height, d.height ?? 0)}`;
   const pos = positionMeters(row);
   infoPosEl.textContent = `x ${pos.x.toFixed(2)}, z ${pos.z.toFixed(2)}`;
+  infoZoneEl.textContent = row.zone_id ?? "—";
+  infoUpstreamEl.textContent = row.upstream ?? "—";
+  infoDownstreamEl.textContent = row.downstream ?? "—";
+  infoNearestEl.textContent = row.nearest ?? "—";
 }
 
 function initThree() {

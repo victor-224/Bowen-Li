@@ -64,6 +64,10 @@ def _path_like_to_json(value: Any) -> Any:
     return None
 
 
+def _error_response(message: str, status_code: int = 500) -> Any:
+    return jsonify({"success": False, "error": message}), status_code
+
+
 def _excel_path() -> Path:
     runtime_excel = runtime_excel_path()
     if runtime_excel.is_file():
@@ -233,9 +237,9 @@ def get_equipment() -> Any:
     try:
         data = load_equipment_from_excel()
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     return jsonify(data)
 
 
@@ -244,13 +248,13 @@ def get_scene() -> Any:
     try:
         equipment = load_equipment_from_excel()
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     try:
         return jsonify(build_scene(equipment))
     except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.get("/api/relations")
@@ -258,14 +262,14 @@ def get_relations() -> Any:
     try:
         equipment = load_equipment_from_excel()
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     try:
         scene = build_scene(equipment)
         return jsonify(build_relations(scene))
     except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.get("/api/files")
@@ -295,25 +299,15 @@ def get_pipeline() -> Any:
     try:
         equipment = load_equipment_from_excel()
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     try:
         return jsonify(build_pipeline_output(equipment))
     except RuntimeError as e:
-        return (
-            jsonify(
-                {
-                    "scene": [],
-                    "relations": {},
-                    "walls": {"walls": [], "rooms": [], "center": [0.0, 0.0]},
-                    "error": str(e),
-                }
-            ),
-            500,
-        )
+        return _error_response(str(e), 500)
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.get("/api/layout_graph")
@@ -321,18 +315,18 @@ def get_layout_graph() -> Any:
     try:
         equipment = load_equipment_from_excel()
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     try:
         payload = build_pipeline_output(equipment)
         return jsonify(payload.get("layout_graph", {"nodes": [], "edges": [], "zones": [], "constraints": []}))
     except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.get("/api/pid_links")
@@ -341,7 +335,7 @@ def get_pid_links() -> Any:
         payload = build_pipeline_output()
         return jsonify(payload.get("phase_c", {}).get("pid_links", {}))
     except (RuntimeError, FileNotFoundError, ValueError) as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.get("/api/topology")
@@ -350,7 +344,12 @@ def get_topology() -> Any:
         payload = build_pipeline_output()
         return jsonify(payload.get("phase_c", {}).get("topology_optimization", {}))
     except (RuntimeError, FileNotFoundError, ValueError) as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
+
+
+@app.get("/health")
+def get_health() -> Any:
+    return jsonify({"status": "ok"})
 
 
 @app.get("/api/plants")
@@ -368,9 +367,9 @@ def get_walls() -> Any:
     try:
         return jsonify(parse_walls_and_rooms(plan_image_path()))
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+        return _error_response(str(e), 404)
     except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
+        return _error_response(str(e), 500)
 
 
 @app.post("/api/upload")
@@ -381,7 +380,7 @@ def upload_project_files() -> Any:
     # Support explicit typed fields and arbitrary multi-file uploads.
     files = list(request.files.items(multi=True))
     if not files:
-        return jsonify({"success": False, "error": "No files uploaded"}), 400
+        return _error_response("No files uploaded", 400)
 
     plan_saved = False
     excel_saved = False
@@ -422,26 +421,24 @@ def upload_project_files() -> Any:
     if not excel_saved and runtime_excel_path().is_file():
         excel_saved = True
     if not (plan_saved and excel_saved):
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Missing required layout and/or excel file after upload",
-                }
-            ),
-            400,
-        )
+        return _error_response("Missing required layout and/or excel file after upload", 400)
 
     try:
         payload = build_pipeline_output()
     except RuntimeError as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return _error_response(str(e), 500)
     except FileNotFoundError as e:
-        return jsonify({"success": False, "error": str(e)}), 404
+        return _error_response(str(e), 404)
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return _error_response(str(e), 500)
     return jsonify({"success": True, **payload})
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False,
+        use_reloader=False,
+        threaded=True,
+    )
