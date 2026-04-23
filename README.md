@@ -150,7 +150,7 @@ Le système classe automatiquement et écrit le cache dans `data/runtime/`.
 
 ---
 
-## 🚀 Quick Start / Démarrage rapide / 快速启动（python3）
+## 🚀 Quick Start (Windows) / Démarrage rapide (Windows) / Windows 快速启动
 
 ### 1) Install dependencies / Installer les dépendances / 安装依赖
 
@@ -158,22 +158,40 @@ Le système classe automatiquement et écrit le cache dans `data/runtime/`.
 python -m pip install -r requirements.txt
 ```
 
-### 2) Start backend (5000) / Démarrer le backend / 启动后端
+### 2) Start demo (recommended) / Démarrer la démo (recommandé) / 启动演示（推荐）
+
+```bash
+python run.py
+```
+
+Or double click / Ou double-cliquer / 或双击：
+
+```text
+start_demo.bat
+```
+
+### 3) Open browser / Ouvrir le navigateur / 打开浏览器
+
+- `http://localhost:3000`
+
+### Upload categories (demo UX) / Catégories d’upload (UX démo) / 上传分类说明
+
+- **Required / Requis / 必填**
+  - `layout` (PDF/PNG/JPG/JPEG): floor/layout drawing used by OCR + wall parsing
+  - `excel` (XLSX): equipment attributes table
+- **Optional / Optionnel / 可选**
+  - `reference` (PDF): additional technical docs, consumed by Phase C P&ID linking
+  - `structure` (PDF/PNG/JPG/JPEG): reserved for structure-specific parsing extensions
+- **Developer-only (hidden in UI) / Développeur seulement (masqué UI) / 开发项（前端隐藏）**
+  - `gad` (PDF): currently used only by backend classifier/P&ID helper, not required for demo path
+
+### Manual fallback / Démarrage manuel / 手动启动方式
 
 ```bash
 python -m backend.api
-```
-
-### 3) Start frontend (3000) / Démarrer le frontend / 启动前端
-
-```bash
 cd frontend
 python -m http.server 3000
 ```
-
-### 4) Open browser / Ouvrir le navigateur / 打开浏览器
-
-- `http://localhost:3000`
 
 ---
 
@@ -197,6 +215,8 @@ python -m http.server 3000
 - `GET /api/files` — 🇨🇳 当前识别文件 / 🇫🇷 fichiers classifiés
 - `GET /api/status` — 🇨🇳 完整性状态 / 🇫🇷 état de complétude
 - `POST /api/upload` — 🇨🇳 上传并重算 / 🇫🇷 upload + recalcul
+- `GET /api/task/<task_id>` — 🇨🇳 后台任务状态 / 🇫🇷 statut de tâche asynchrone
+- `GET /api/task/latest` — 🇨🇳 最近一次任务状态 / 🇫🇷 dernier statut de tâche
 
 ### 语义接口 / API sémantiques / Semantic APIs
 
@@ -205,6 +225,13 @@ python -m http.server 3000
 - `GET /api/relations` — 🇨🇳 空间关系 / 🇫🇷 relations spatiales
 - `GET /api/layout_graph` — 🇨🇳 语义图结构 / 🇫🇷 structure de graphe sémantique
 - `GET /api/pipeline` — 🇨🇳 统一输出 / 🇫🇷 sortie unifiée
+
+### Phase C 接口 / API Phase C / Phase C APIs
+
+- `GET /api/pid_links` — 🇨🇳 P&ID 关联结果 / 🇫🇷 liens d’intégration P&ID
+- `GET /api/topology` — 🇨🇳 拓扑约束诊断与建议 / 🇫🇷 diagnostic et recommandations topologiques
+- `GET /api/plants` — 🇨🇳 多工厂版本清单 / 🇫🇷 registre de versions multi-usines
+- `GET /api/observability` — 🇨🇳 指标追踪审计 / 🇫🇷 métriques, traces et audit
 
 ---
 
@@ -237,6 +264,13 @@ python -m http.server 3000
     "edges": [],
     "zones": [],
     "constraints": []
+  },
+  "phase_c": {
+    "pid_links": {},
+    "topology_optimization": {},
+    "multiplant_version": {
+      "version_id": "v1"
+    }
   }
 }
 ```
@@ -288,11 +322,11 @@ python -m http.server 3000
 - 关系边置信度评分 / Scoring de confiance des arêtes de relation
 - 更强工艺流推理（upstream/downstream） / Inférence de flux procédé renforcée
 
-### Phase C（规划中 / Planifié）
-- P&ID 联动 / Intégration P&ID
-- 拓扑约束优化 / Optimisation topologique
-- 多工厂版本管理 / Versioning multi-usines
-- Observability（metrics/tracing/audit）
+### Phase C（基础版已实现 / Base implémentée）
+- P&ID 联动（PDF 参考文档标签提取 + 工艺边映射）/ Intégration P&ID (extraction tags PDF + mapping des arêtes procédé)
+- 拓扑约束优化（安全间距违规检测 + 负载分区诊断）/ Optimisation topologique (détection des violations d’espacement + diagnostic de surcharge des zones)
+- 多工厂版本管理（运行时快照注册与版本列表）/ Versioning multi-usines (enregistrement des snapshots runtime + liste des versions)
+- Observability（metrics/tracing/audit 基础链路）/ Observabilité (chaîne de base metrics/tracing/audit)
 
 ---
 

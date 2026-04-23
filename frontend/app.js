@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-const API_BASE = "http://127.0.0.1:5000";
+const API_BASE = "http://localhost:5000";
 const MM = 0.001;
 
 const statusEl = document.getElementById("status");
@@ -11,27 +11,48 @@ const containerEl = document.getElementById("three-container");
 const layoutFileInput = document.getElementById("layout-file-input");
 const excelFileInput = document.getElementById("excel-file-input");
 const referenceFileInput = document.getElementById("reference-file-input");
+const structureFileInput = document.getElementById("structure-file-input");
 const gadFileInput = document.getElementById("gad-file-input");
 const uploadBtn = document.getElementById("load-project-btn");
 const loadedNamesEl = document.getElementById("loaded-filenames");
 const uploadMsgEl = document.getElementById("upload-feedback");
+const processStatusEl = document.getElementById("process-status");
+const logPanelEl = document.getElementById("log-panel");
 const infoTagEl = document.getElementById("info-tag");
 const infoServiceEl = document.getElementById("info-service");
 const infoSizeEl = document.getElementById("info-size");
 const infoPosEl = document.getElementById("info-pos");
 const infoZoneEl = document.getElementById("info-zone");
-const infoFlowEl = document.getElementById("info-flow");
+const infoUpstreamEl = document.getElementById("info-upstream");
+const infoDownstreamEl = document.getElementById("info-downstream");
 const infoNearestEl = document.getElementById("info-nearest");
+const cancelBtn = document.getElementById("cancel-task-btn");
+let activeTaskId = null;
 
 function setStatus(text, isError) {
   statusEl.textContent = text;
   statusEl.className = isError ? "error" : "";
 }
 
-async function fetchJson(path) {
-  const res = await fetch(`${API_BASE}${path}`);
+function pushLog(message, level = "info") {
+  const ts = new Date().toLocaleTimeString();
+  const line = `[${ts}] [${level.toUpperCase()}] ${message}`;
+  logPanelEl.textContent = `${line}\n${logPanelEl.textContent}`.slice(0, 16000);
+}
+
+function setProcessStatus(message, isError = false) {
+  processStatusEl.textContent = message;
+  processStatusEl.className = isError ? "error" : "";
+}
+
+async function fetchJson(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, options);
   const body = await res.json().catch(async () => ({ error: await res.text() }));
   if (!res.ok) {
+    const structured = body?.error;
+    if (structured && typeof structured === "object") {
+      throw new Error(`${structured.code || "PIPELINE_ERROR"}: ${structured.message || JSON.stringify(structured)}`);
+    }
     throw new Error(`${path} ${res.status}: ${body.error || JSON.stringify(body)}`);
   }
   return body;
@@ -39,11 +60,13 @@ async function fetchJson(path) {
 
 async function uploadProjectFiles(planFile, excelFile) {
   const form = new FormData();
-  if (planFile) form.append("layout_file", planFile);
+  if (planFile) form.append("plan_file", planFile);
   if (excelFile) form.append("excel_file", excelFile);
   const ref = referenceFileInput.files && referenceFileInput.files[0];
+  const structure = structureFileInput.files && structureFileInput.files[0];
   const gad = gadFileInput.files && gadFileInput.files[0];
   if (ref) form.append("reference_file", ref);
+  if (structure) form.append("structure_file", structure);
   if (gad) form.append("gad_file", gad);
   const res = await fetch(`${API_BASE}/api/upload`, {
     method: "POST",
@@ -53,6 +76,56 @@ async function uploadProjectFiles(planFile, excelFile) {
   if (!res.ok || body.success !== true) {
     const reason = body.error || `HTTP ${res.status}`;
     throw new Error(`Upload failed: ${reason}`);
+  }
+  return body;
+}
+
+function stageLabel(status) {
+  const map = {
+    queued: "Uploading",
+    validating: "Validating files",
+    processing_ocr: "Running OCR",
+    parsing_layout: "Parsing layout",
+    building_graph: "Building graph",
+    rendering_scene: "Rendering scene",
+    finalizing: "Finalizing",
+    done: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  };
+  return map[status] || status;
+}
+
+async function pollTaskUntilDone(taskId, timeoutMs = 180000, abortSignal) {
+  const t0 = Date.now();
+  let lastMessage = "Starting task";
+  let delayMs = 500;
+  while (Date.now() - t0 < timeoutMs) {
+    if (abortSignal?.aborted) throw new Error("Polling aborted");
+    const task = await fetchJson(`/api/task/${encodeURIComponent(taskId)}`);
+    const label = stageLabel(task.status);
+    lastMessage = `${label}: ${task.message || ""} (${task.progress || 0}%)`.trim();
+    setProcessStatus(lastMessage);
+    if (task.status === "done") return task;
+    if (task.status === "cancelled") throw new Error("Task cancelled by user.");
+    if (task.status === "failed") {
+      const detail = task.error;
+      if (detail && typeof detail === "object") {
+        throw new Error(`${detail.code || "PIPELINE_ERROR"}: ${detail.message || "Processing failed"}`);
+      }
+      throw new Error(String(detail || "Processing failed"));
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(4000, Math.floor(delayMs * 1.5));
+  }
+  throw new Error(`Processing timeout after ${Math.round(timeoutMs / 1000)}s (${lastMessage})`);
+}
+
+async function cancelTask(taskId) {
+  const res = await fetch(`${API_BASE}/api/task/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.success !== true) {
+    throw new Error(body?.error?.message || body?.error || `Cancel failed (${res.status})`);
   }
   return body;
 }
@@ -90,12 +163,14 @@ function updateSelectedNames() {
   const plan = layoutFileInput.files && layoutFileInput.files[0];
   const excel = excelFileInput.files && excelFileInput.files[0];
   const reference = referenceFileInput.files && referenceFileInput.files[0];
+  const structure = structureFileInput.files && structureFileInput.files[0];
   const gad = gadFileInput.files && gadFileInput.files[0];
   const planName = plan ? plan.name : "未选择";
   const excelName = excel ? excel.name : "未选择";
   const referenceName = reference ? reference.name : "未选择";
+  const structureName = structure ? structure.name : "未选择";
   const gadName = gad ? gad.name : "未选择";
-  loadedNamesEl.textContent = `当前已选择：图纸（${planName}），Excel（${excelName}），参考（${referenceName}），GAD（${gadName})`;
+  loadedNamesEl.textContent = `当前已选择：图纸（${planName}），Excel（${excelName}），参考（${referenceName}），结构（${structureName}），GAD（${gadName})`;
 }
 
 function num(v, fallback) {
@@ -207,6 +282,10 @@ function updateInfoPanel(row) {
     infoServiceEl.textContent = "—";
     infoSizeEl.textContent = "—";
     infoPosEl.textContent = "—";
+    infoZoneEl.textContent = "—";
+    infoUpstreamEl.textContent = "—";
+    infoDownstreamEl.textContent = "—";
+    infoNearestEl.textContent = "—";
     return;
   }
   const d = row.dimensions || {};
@@ -218,6 +297,10 @@ function updateInfoPanel(row) {
   )} · H ${num(row.height, d.height ?? 0)}`;
   const pos = positionMeters(row);
   infoPosEl.textContent = `x ${pos.x.toFixed(2)}, z ${pos.z.toFixed(2)}`;
+  infoZoneEl.textContent = row.zone_id ?? "—";
+  infoUpstreamEl.textContent = row.upstream ?? "—";
+  infoDownstreamEl.textContent = row.downstream ?? "—";
+  infoNearestEl.textContent = row.nearest ?? "—";
 }
 
 function initThree() {
@@ -380,17 +463,42 @@ async function handleUploadClick() {
     return;
   }
   uploadBtn.disabled = true;
+  cancelBtn.disabled = true;
   setUploadMessage("上传中...");
+  setProcessStatus("Uploading files...");
   try {
-    await uploadProjectFiles(plan, excel);
+    const upload = await uploadProjectFiles(plan, excel);
+    activeTaskId = upload.task_id || null;
+    pushLog(`Upload accepted, task ${activeTaskId || "N/A"}`);
+    if (activeTaskId) {
+      cancelBtn.disabled = false;
+      await pollTaskUntilDone(activeTaskId);
+    }
     await refreshScene();
     setUploadMessage("success: 项目文件加载成功。");
+    setProcessStatus("Processing complete");
     setStatus("Connected to API.");
   } catch (e) {
-    setUploadMessage(String(e.message || e), true);
-    setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
+    const msg = String(e.message || e);
+    let userMsg = msg;
+    if (msg.includes("OCR_FAILED")) userMsg = "OCR failed: no equipment tags detected in layout.";
+    else if (msg.includes("INVALID_EXCEL")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
+    else if (msg.includes("INVALID_LAYOUT")) userMsg = "No layout detected or unreadable plan image.";
+    else if (msg.includes("UPLOAD_TOO_LARGE")) userMsg = "Upload too large. Please use smaller files.";
+    else if (msg.includes("CANCELLED")) userMsg = "Task cancelled.";
+    else if (msg.includes("PIPELINE_TIMEOUT")) userMsg = "Processing timeout.";
+    else if (msg.toLowerCase().includes("sheet")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
+    else if (msg.toLowerCase().includes("excel not found")) userMsg = "No Excel detected. Please upload a valid .xlsx file.";
+    else if (msg.toLowerCase().includes("plan image not found")) userMsg = "No layout detected. Please upload plan drawing.";
+    else if (msg.toLowerCase().includes("timeout")) userMsg = `Processing timeout. ${msg}`;
+    setUploadMessage(userMsg, true);
+    setProcessStatus(userMsg, true);
+    pushLog(userMsg, "error");
+    setStatus(`Backend/API error (${API_BASE}): ${userMsg}`, true);
   } finally {
     uploadBtn.disabled = false;
+    cancelBtn.disabled = true;
+    activeTaskId = null;
   }
 }
 
@@ -398,14 +506,29 @@ async function main() {
   layoutFileInput.addEventListener("change", updateSelectedNames);
   excelFileInput.addEventListener("change", updateSelectedNames);
   referenceFileInput.addEventListener("change", updateSelectedNames);
+  structureFileInput.addEventListener("change", updateSelectedNames);
   gadFileInput.addEventListener("change", updateSelectedNames);
   uploadBtn.addEventListener("click", handleUploadClick);
+  cancelBtn.addEventListener("click", async () => {
+    if (!activeTaskId) return;
+    try {
+      await cancelTask(activeTaskId);
+      setProcessStatus("Cancelled");
+      pushLog(`Task ${activeTaskId} cancelled`, "warn");
+    } catch (e) {
+      pushLog(`Cancel failed: ${e.message || e}`, "error");
+    }
+  });
   updateSelectedNames();
   try {
     await refreshScene();
     setStatus("Connected to API.");
+    setProcessStatus("Idle");
+    pushLog("Frontend initialized and connected");
   } catch (e) {
     setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
+    setProcessStatus("Backend offline", true);
+    pushLog(`Backend connection failed: ${e.message}`, "error");
   }
 }
 

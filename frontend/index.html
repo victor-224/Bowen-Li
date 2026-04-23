@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Industrial Digital Twin</title>
+  <link rel="icon" href="data:,">
   <script type="importmap">
   {
     "imports": {
@@ -95,11 +96,15 @@
       <input id="excel-file-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     </div>
     <div>
-      <label for="reference-file-input">选择参考PDF</label>
+      <label for="reference-file-input">可选参考文档（PDF）</label>
       <input id="reference-file-input" type="file" accept=".pdf,application/pdf">
     </div>
     <div>
-      <label for="gad-file-input">选择GAD PDF</label>
+      <label for="structure-file-input">可选结构图（PDF/PNG）</label>
+      <input id="structure-file-input" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+    </div>
+    <div style="display:none;">
+      <label for="gad-file-input">开发用途：GAD PDF</label>
       <input id="gad-file-input" type="file" accept=".pdf,application/pdf">
     </div>
     <div>
@@ -107,6 +112,9 @@
       <button id="load-project-btn" type="button">加载项目</button>
     </div>
   </div>
+  <h2>Processing Status</h2>
+  <p id="processing-status">Idle</p>
+  <button id="cancel-task-btn" type="button">取消当前任务</button>
   <p id="upload-feedback"></p>
   <p id="loaded-filenames">当前已加载：平面图（未选择），Excel（未选择）</p>
 
@@ -129,6 +137,8 @@
       <div class="kv"><span class="label">nearest</span><span class="value" id="info-nearest">-</span></div>
     </aside>
   </div>
+  <h2>Logs</h2>
+  <pre id="log-panel" style="background:#111;color:#d4d4d4;padding:0.75rem;border-radius:6px;max-height:180px;overflow:auto;"></pre>
 
   <script type="module" src="app.js"></script>
 </body>
