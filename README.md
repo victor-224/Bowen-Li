@@ -155,20 +155,20 @@ Le système classe automatiquement et écrit le cache dans `data/runtime/`.
 ### 1) Install dependencies / Installer les dépendances / 安装依赖
 
 ```bash
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ### 2) Start backend (5000) / Démarrer le backend / 启动后端
 
 ```bash
-python3 -m backend.api
+python -m backend.api
 ```
 
 ### 3) Start frontend (3000) / Démarrer le frontend / 启动前端
 
 ```bash
 cd frontend
-python3 -m http.server 3000
+python -m http.server 3000
 ```
 
 ### 4) Open browser / Ouvrir le navigateur / 打开浏览器
