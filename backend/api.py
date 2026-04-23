@@ -46,7 +46,6 @@ TASK_PROCESSING_OCR = "processing_ocr"
 TASK_PARSING_LAYOUT = "parsing_layout"
 TASK_BUILDING_GRAPH = "building_graph"
 TASK_RENDERING_SCENE = "rendering_scene"
-TASK_FINALIZING = "finalizing"
 TASK_DONE = "done"
 TASK_FAILED = "failed"
 TASK_CANCELLED = "cancelled"
@@ -103,7 +102,6 @@ def _transition(task_id: str, status: str, progress: int, message: str) -> None:
         TASK_PARSING_LAYOUT,
         TASK_BUILDING_GRAPH,
         TASK_RENDERING_SCENE,
-        TASK_FINALIZING,
     }:
         next_stage = status
     _RUNTIME_STATE.update_task(task_id, status=status, stage=next_stage, progress=progress, message=message)
@@ -367,7 +365,6 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
 
 def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
     task_id = ctx.task_id
-    start = time.time()
     _transition(task_id, TASK_VALIDATING, 8, "Validating inputs")
     if _cancelled(ctx):
         raise RuntimeError("Task cancelled")
@@ -414,14 +411,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
             "multiplant_version": plant_version,
         },
     }
-    _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
     _RUNTIME_STATE.set_cached_payload(ctx.signature, payload)
-    _TASK_STATS["done"] = int(_TASK_STATS["done"]) + 1
-    durations = _TASK_STATS["durations"]
-    if isinstance(durations, list):
-        durations.append(time.time() - start)
-        if len(durations) > 200:
-            del durations[: len(durations) - 200]
     return payload
 
 
@@ -580,7 +570,6 @@ def get_observability_data() -> Any:
                 TASK_PARSING_LAYOUT,
                 TASK_BUILDING_GRAPH,
                 TASK_RENDERING_SCENE,
-                TASK_FINALIZING,
                 TASK_DONE,
                 TASK_FAILED,
                 TASK_CANCELLED,
@@ -676,7 +665,7 @@ def upload_project_files() -> Any:
         graph_signature=graph_sig,
         builder=lambda: _build_pipeline_dag(ctx),
     )
-    return jsonify({"success": True, "task_id": task_id, "message": "Processing started"})
+    return jsonify({"success": True, "task_id": task_id, "status": TASK_QUEUED, "message": "Processing started"})
 
 
 @app.get("/api/task/<task_id>")
@@ -723,7 +712,6 @@ def cancel_task(task_id: str) -> Any:
     if ctx and ctx.cancelled:
         ctx.cancelled.set()
     _transition(task_id, TASK_CANCELLED, int(rec.get("progress", 0)), "Cancelled by user")
-    _TASK_STATS["cancelled"] = int(_TASK_STATS["cancelled"]) + 1
     return jsonify({"success": True, "task_id": task_id, "status": TASK_CANCELLED})
 
 

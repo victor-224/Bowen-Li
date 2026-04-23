@@ -55,10 +55,9 @@ _STAGE_ORDER = {
     "parsing_layout": 3,
     "building_graph": 4,
     "rendering_scene": 5,
-    "finalizing": 6,
-    "done": 7,
-    "failed": 8,
-    "cancelled": 9,
+    "done": 6,
+    "failed": 7,
+    "cancelled": 8,
 }
 
 
@@ -69,8 +68,7 @@ def _stage_progress(stage: str) -> int:
         "processing_ocr": 25,
         "parsing_layout": 45,
         "building_graph": 65,
-        "rendering_scene": 82,
-        "finalizing": 95,
+        "rendering_scene": 85,
         "done": 100,
         "failed": 100,
         "cancelled": 100,

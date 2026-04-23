@@ -88,7 +88,6 @@ function stageLabel(status) {
     parsing_layout: "Parsing layout",
     building_graph: "Building graph",
     rendering_scene: "Rendering scene",
-    finalizing: "Finalizing output",
     done: "Completed",
     failed: "Failed",
     cancelled: "Cancelled",
