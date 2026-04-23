@@ -55,9 +55,10 @@ _STAGE_ORDER = {
     "parsing_layout": 3,
     "building_graph": 4,
     "rendering_scene": 5,
-    "done": 6,
-    "failed": 7,
-    "cancelled": 8,
+    "finalizing": 6,
+    "done": 7,
+    "failed": 8,
+    "cancelled": 9,
 }
 
 
@@ -69,6 +70,7 @@ def _stage_progress(stage: str) -> int:
         "parsing_layout": 45,
         "building_graph": 65,
         "rendering_scene": 85,
+        "finalizing": 95,
         "done": 100,
         "failed": 100,
         "cancelled": 100,
@@ -85,10 +87,8 @@ class RuntimeState:
         self._latest_task_id: Optional[str] = None
         self._max_tasks: int = 20
         self._task_ttl_s: int = 600
-        # Multi-layer cache
-        self._ocr_cache: Dict[str, Dict[str, Any]] = {}
-        self._layout_cache: Dict[str, Dict[str, Any]] = {}
-        self._graph_cache: Dict[str, Dict[str, Any]] = {}
+        # Single deterministic cache by input signature.
+        self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_hits: int = 0
         self._cache_misses: int = 0
         self._completed_count: int = 0
@@ -247,9 +247,7 @@ class RuntimeState:
         self,
         task_id: str,
         *,
-        ocr_signature: str,
-        layout_signature: str,
-        graph_signature: str,
+        signature: str,
         builder: Callable[[], Dict[str, Any]],
     ) -> None:
         def _job() -> None:
@@ -272,11 +270,9 @@ class RuntimeState:
                     return
                 self.set_stage(task_id, "rendering_scene", "Rendering scene payload")
                 payload = builder()
-                with self._lock:
-                    self._ocr_cache[ocr_signature] = payload
-                    self._layout_cache[layout_signature] = payload
-                    self._graph_cache[graph_signature] = payload
                 self.set_stage(task_id, "finalizing", "Finalizing")
+                with self._lock:
+                    self._cache[signature] = dict(payload)
                 self.update_task(task_id, status="done", stage="done", message="Completed", result=payload)
             except Exception as e:  # noqa: BLE001 - structured error output
                 self.update_task(
@@ -292,30 +288,18 @@ class RuntimeState:
 
     def get_cached_payload(
         self,
-        *,
-        ocr_signature: str,
-        layout_signature: str,
-        graph_signature: str,
+        signature: str,
     ) -> Optional[Dict[str, Any]]:
         with self._lock:
-            if graph_signature in self._graph_cache:
+            if signature in self._cache:
                 self._cache_hits += 1
-                return dict(self._graph_cache[graph_signature])
-            if layout_signature in self._layout_cache:
-                self._cache_hits += 1
-                return dict(self._layout_cache[layout_signature])
-            if ocr_signature in self._ocr_cache:
-                self._cache_hits += 1
-                return dict(self._ocr_cache[ocr_signature])
+                return dict(self._cache[signature])
             self._cache_misses += 1
             return None
 
-    def set_cached_payload(self, *, ocr_signature: str, layout_signature: str, graph_signature: str, payload: Dict[str, Any]) -> None:
+    def set_cached_payload(self, *, signature: str, payload: Dict[str, Any]) -> None:
         with self._lock:
-            data = dict(payload)
-            self._ocr_cache[ocr_signature] = data
-            self._layout_cache[layout_signature] = data
-            self._graph_cache[graph_signature] = data
+            self._cache[signature] = dict(payload)
 
     def build_signature(self, paths: Mapping[str, Optional[Path]]) -> str:
         return _files_signature(paths)
@@ -335,7 +319,7 @@ class RuntimeState:
                 "cancelled_tasks": self._cancelled_count,
                 "cache_hit_rate": round(cache_hit_rate, 4),
                 "avg_task_duration": round(avg_duration, 3),
-                "memory_estimate": f"tasks={len(self._tasks)} ocr_cache={len(self._ocr_cache)} layout_cache={len(self._layout_cache)} graph_cache={len(self._graph_cache)}",
+                "memory_estimate": f"tasks={len(self._tasks)} cache={len(self._cache)}",
                 "worker_status": self._worker_status,
             }
 

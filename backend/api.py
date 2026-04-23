@@ -46,6 +46,7 @@ TASK_PROCESSING_OCR = "processing_ocr"
 TASK_PARSING_LAYOUT = "parsing_layout"
 TASK_BUILDING_GRAPH = "building_graph"
 TASK_RENDERING_SCENE = "rendering_scene"
+TASK_FINALIZING = "finalizing"
 TASK_DONE = "done"
 TASK_FAILED = "failed"
 TASK_CANCELLED = "cancelled"
@@ -102,6 +103,7 @@ def _transition(task_id: str, status: str, progress: int, message: str) -> None:
         TASK_PARSING_LAYOUT,
         TASK_BUILDING_GRAPH,
         TASK_RENDERING_SCENE,
+        TASK_FINALIZING,
     }:
         next_stage = status
     _RUNTIME_STATE.update_task(task_id, status=status, stage=next_stage, progress=progress, message=message)
@@ -173,13 +175,6 @@ def _pipeline_signature() -> str:
     return _RUNTIME_STATE.build_signature(paths)
 
 
-def _build_signatures(base_signature: str) -> tuple[str, str, str]:
-    ocr_sig = f"ocr::{base_signature}"
-    layout_sig = f"layout::{base_signature}"
-    graph_sig = f"graph::{base_signature}"
-    return ocr_sig, layout_sig, graph_sig
-
-
 def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     signature = _pipeline_signature()
     cached = _RUNTIME_STATE.get_cached_payload(signature)
@@ -188,7 +183,7 @@ def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] =
         return cached
     _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
-    _RUNTIME_STATE.set_cached_payload(signature, payload)
+    _RUNTIME_STATE.set_cached_payload(signature=signature, payload=payload)
     return payload
 
 
@@ -400,6 +395,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         payload={"scene": scene_doc.get("equipment", []), "layout_graph": layout_graph},
         source_files=source_files,
     )
+    _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
     payload = {
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
@@ -411,7 +407,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
             "multiplant_version": plant_version,
         },
     }
-    _RUNTIME_STATE.set_cached_payload(ctx.signature, payload)
+    _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
 
@@ -494,6 +490,8 @@ def get_pipeline() -> Any:
         return _error_response(str(e), 404)
     except ValueError as e:
         return _error_response(str(e), 500)
+    except Exception as e:  # noqa: BLE001
+        return _error_response_struct("INVALID_EXCEL", _classify_pipeline_error(str(e)), TASK_VALIDATING, 400)
     try:
         return jsonify(_get_or_build_pipeline_sync(equipment))
     except RuntimeError as e:
@@ -551,30 +549,15 @@ def get_plants() -> Any:
 
 @app.get("/api/observability")
 def get_observability_data() -> Any:
-    base = get_observability(runtime_dir_path())
     rt = _RUNTIME_STATE.observability()
     return jsonify(
         {
             "active_tasks": rt.get("active_tasks", 0),
             "completed_tasks": rt.get("completed_tasks", 0),
             "failed_tasks": rt.get("failed_tasks", 0),
-            "cancelled_tasks": rt.get("cancelled_tasks", 0),
             "cache_hit_rate": rt.get("cache_hit_rate", 0.0),
             "avg_task_duration": rt.get("avg_task_duration", 0.0),
-            "memory_estimate": rt.get("memory_estimate", "unavailable"),
             "worker_status": rt.get("worker_status", "healthy"),
-            "task_state_model": [
-                TASK_QUEUED,
-                TASK_VALIDATING,
-                TASK_PROCESSING_OCR,
-                TASK_PARSING_LAYOUT,
-                TASK_BUILDING_GRAPH,
-                TASK_RENDERING_SCENE,
-                TASK_DONE,
-                TASK_FAILED,
-                TASK_CANCELLED,
-            ],
-            **base,
         }
     )
 
@@ -657,12 +640,9 @@ def upload_project_files() -> Any:
     task_id = _RUNTIME_STATE.new_task("Upload received")
     signature = _pipeline_signature()
     ctx = _register_task_context(task_id, signature)
-    ocr_sig, layout_sig, graph_sig = _build_signatures(signature)
     _RUNTIME_STATE.submit_pipeline_task(
         task_id,
-        ocr_signature=ocr_sig,
-        layout_signature=layout_sig,
-        graph_signature=graph_sig,
+        signature=signature,
         builder=lambda: _build_pipeline_dag(ctx),
     )
     return jsonify({"success": True, "task_id": task_id, "status": TASK_QUEUED, "message": "Processing started"})
