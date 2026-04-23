@@ -96,6 +96,9 @@ class RuntimeState:
         self._cancelled_count: int = 0
         self._total_duration_ms: float = 0.0
         self._worker_status: str = "healthy"
+        # Heartbeat/stuck/timeout thresholds (seconds).
+        self._stuck_threshold_s: float = 60.0
+        self._task_timeout_s: float = 180.0
 
     def _prune_tasks_unlocked(self) -> None:
         now = time.time()
@@ -197,11 +200,37 @@ class RuntimeState:
             rec = self._tasks.get(task_id)
             return bool(rec.cancelled) if rec else False
 
+    def _enforce_stuck_and_timeout_unlocked(self, rec: TaskRecord) -> None:
+        if rec.status not in {"queued", "running"}:
+            return
+        now = time.time()
+        age_total = now - rec.created_at
+        idle = now - rec.updated_at
+        stuck = idle > self._stuck_threshold_s
+        timed_out = age_total > self._task_timeout_s
+        if not (stuck or timed_out):
+            return
+        rec.status = "failed"
+        # keep last known pipeline stage for failure clarity
+        rec.progress = 100
+        rec.error = "Task exceeded allowed time" if timed_out else "No heartbeat update within threshold"
+        rec.error_code = "TIMEOUT" if timed_out else "STUCK_DETECTED"
+        rec.message = "Failed (timeout)" if timed_out else "Failed (stuck)"
+        rec.duration_ms = max(0.0, (now - rec.created_at) * 1000.0)
+        rec.events.append({"time": now, "stage": rec.stage, "message": rec.message})
+        self._total_duration_ms += rec.duration_ms
+        self._failed_count += 1
+
+    def _enforce_all_unlocked(self) -> None:
+        for rec in list(self._tasks.values()):
+            self._enforce_stuck_and_timeout_unlocked(rec)
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             rec = self._tasks.get(task_id)
             if rec is None:
                 return None
+            self._enforce_stuck_and_timeout_unlocked(rec)
             return {
                 "task_id": rec.task_id,
                 "status": rec.status,
@@ -230,6 +259,7 @@ class RuntimeState:
             rec = self._tasks.get(self._latest_task_id)
             if rec is None:
                 return None
+            self._enforce_stuck_and_timeout_unlocked(rec)
             return {
                 "task_id": rec.task_id,
                 "status": rec.status,
@@ -275,10 +305,13 @@ class RuntimeState:
                     self._cache[signature] = dict(payload)
                 self.update_task(task_id, status="done", stage="done", message="Completed", result=payload)
             except Exception as e:  # noqa: BLE001 - structured error output
+                # preserve last pipeline stage for failure clarity
+                current = self.get_task(task_id) or {}
+                last_stage = str(current.get("stage") or "validating")
                 self.update_task(
                     task_id,
                     status="failed",
-                    stage="failed",
+                    stage=last_stage,
                     message="Failed",
                     error=str(e),
                     error_code="PIPELINE_ERROR",
@@ -306,6 +339,7 @@ class RuntimeState:
 
     def observability(self) -> Dict[str, Any]:
         with self._lock:
+            self._enforce_all_unlocked()
             active = sum(1 for r in self._tasks.values() if r.status in {"queued", "running"})
             completed = self._completed_count
             failed = self._failed_count
