@@ -1,48 +1,30 @@
-"""Assemble scene document from equipment + detected plan positions (canonical shape in scene_spec)."""
+"""Assemble scene document from equipment + detected plan positions (canonical shape in scene_spec).
+
+Scene stage MUST NOT access the filesystem directly. All runtime-asset
+dependencies are governed by `backend/asset_contract.py`.
+"""
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-import cv2  # used for corruption pre-check
-
 from backend.api import equipment_dict_to_list
+from backend.asset_contract import (
+    PLAN_IMAGE_CONTRACT,
+    AssetContractViolation,
+    load_asset,
+)
 from backend.engines.geometry import geometry_engine
-from backend.locator import default_plan_path, detect_positions_with_confidence, pixel_to_mm
+from backend.locator import detect_positions_with_confidence, pixel_to_mm
 from backend.scene_spec import build_equipment_list, empty_scene
 from backend.walls import parse_walls_and_rooms
 
 
 logger = logging.getLogger("industrial_digital_twin.scene")
 
-
-class ScenePlanMissingError(FileNotFoundError):
-    """Raised when plan.png input is missing for scene build."""
-
-
-class ScenePlanCorruptedError(ValueError):
-    """Raised when plan.png input exists but is unreadable/corrupted."""
-
-
-def _ensure_plan_asset(plan_path: Optional[Path]) -> Path:
-    """Guard scene input asset: must exist and be readable by OpenCV."""
-    if plan_path is None:
-        plan_path = default_plan_path()
-    p = Path(plan_path)
-    if not p or not os.path.exists(p):
-        raise ScenePlanMissingError(
-            "[SCENE_ERROR] plan.png missing. Scene pipeline cannot proceed."
-        )
-    img = cv2.imread(str(p))
-    if img is None:
-        raise ScenePlanCorruptedError(
-            "[SCENE_ERROR] plan.png is corrupted or unreadable"
-        )
-    logger.info("[SCENE] loading plan image: %s", str(p))
-    return p
+SCENE_STAGE = "scene_render"
 
 
 def build_scene_document(
@@ -53,9 +35,12 @@ def build_scene_document(
     """equipment (tag -> row) -> scene dict following backend/scene_spec.py.
 
     Position source priority: plan OCR/pickpoint -> mm conversion.
-    The plan image asset is required and must be readable before any OCR / parsing.
+    The plan image asset is a contracted artifact; this stage only consumes
+    it through the contract layer.
     """
-    safe_plan = _ensure_plan_asset(plan_path)
+    # Contract-governed input. Any violation surfaces as AssetContractViolation
+    # which the API layer translates into a structured ASSET_* error.
+    safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
 
     allowed_tags = set(str(t) for t in equipment.keys())
     detected = (
@@ -85,3 +70,6 @@ def build_scene_document(
     scene["rooms"] = wall_info.get("rooms", [])
     scene["center"] = wall_info.get("center", [0.0, 0.0])
     return geometry_engine(scene)
+
+
+__all__ = ["build_scene_document", "AssetContractViolation", "SCENE_STAGE"]

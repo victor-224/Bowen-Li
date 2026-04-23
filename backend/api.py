@@ -11,6 +11,7 @@ from typing import Any, Dict, List, MutableMapping, Optional
 import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from backend.asset_contract import AssetContractViolation
 from backend.file_classifier import classify_files
 from backend.pdf_loader import first_page_to_layout_png
 from backend.relations import build_relations
@@ -125,6 +126,11 @@ def _pipeline_error(code: str, message: str, stage: str) -> Dict[str, Any]:
 
 def _error_response_struct(code: str, message: str, stage: str, status_code: int = 500) -> Any:
     return jsonify({"success": False, "error": _pipeline_error(code, message, stage)}), status_code
+
+
+def _asset_violation_response(e: AssetContractViolation, status_code: int = 400) -> Any:
+    payload = e.to_error_payload()
+    return jsonify({"success": False, "error": payload}), status_code
 
 
 def _repo_root() -> Path:
@@ -460,6 +466,8 @@ def get_scene() -> Any:
     try:
         pipeline = _get_or_build_pipeline_sync(equipment)
         return jsonify({"equipment": pipeline.get("scene", []), "walls": pipeline.get("walls", {}).get("walls", [])})
+    except AssetContractViolation as e:
+        return _asset_violation_response(e, status_code=400)
     except FileNotFoundError as e:
         code, stage = _classify_pipeline_error_code(str(e))
         return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 400)
@@ -517,6 +525,8 @@ def get_pipeline() -> Any:
         return _error_response_struct("INVALID_EXCEL", _classify_pipeline_error(str(e)), TASK_VALIDATING, 400)
     try:
         return jsonify(_get_or_build_pipeline_sync(equipment))
+    except AssetContractViolation as e:
+        return _asset_violation_response(e, status_code=400)
     except RuntimeError as e:
         return _error_response(str(e), 500)
     except FileNotFoundError as e:
@@ -680,8 +690,33 @@ def get_task_status(task_id: str) -> Any:
         raw_message = str(rec.get("error") or "")
         existing_code = str(rec.get("error_code") or "")
         stored_stage = str(rec.get("stage") or "")
+        # Asset contract violation codes take priority and carry asset context.
+        if existing_code in {"ASSET_MISSING", "ASSET_CORRUPTED"}:
+            from backend.asset_contract import PLAN_IMAGE_CONTRACT
+
+            error_payload: Dict[str, Any] = {
+                "code": existing_code,
+                "asset": PLAN_IMAGE_CONTRACT.name,
+                "produced_by": PLAN_IMAGE_CONTRACT.produced_by,
+                "consumed_by": "scene_render",
+                "stage": "scene_render",
+                "message": raw_message or (
+                    f"Asset '{PLAN_IMAGE_CONTRACT.name}' contract violated."
+                ),
+            }
+            return jsonify(
+                {
+                    "success": False,
+                    "task_id": rec.get("task_id"),
+                    "status": TASK_FAILED,
+                    "progress": rec.get("progress"),
+                    "message": rec.get("message"),
+                    "error": error_payload,
+                    "created_at": rec.get("created_at"),
+                    "updated_at": rec.get("updated_at"),
+                }
+            )
         inferred_code, inferred_stage = _classify_pipeline_error_code(raw_message)
-        # Prefer specific inferred stage/code if backend raw message reveals a stage-specific failure.
         code = inferred_code if inferred_code != "PIPELINE_ERROR" else (existing_code or inferred_code)
         stage = inferred_stage if inferred_code != "PIPELINE_ERROR" else (stored_stage or inferred_stage)
         return jsonify(

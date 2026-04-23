@@ -308,13 +308,14 @@ class RuntimeState:
                 # preserve last pipeline stage for failure clarity
                 current = self.get_task(task_id) or {}
                 last_stage = str(current.get("stage") or "validating")
+                code = getattr(e, "code", None) or "PIPELINE_ERROR"
                 self.update_task(
                     task_id,
                     status="failed",
                     stage=last_stage,
                     message="Failed",
                     error=str(e),
-                    error_code="PIPELINE_ERROR",
+                    error_code=str(code),
                 )
 
         self._executor.submit(_job)
