@@ -7,7 +7,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from backend.api import equipment_dict_to_list
 from backend.engines.geometry import geometry_engine
-from backend.locator import default_plan_path, detect_positions, pixel_to_mm
+from backend.locator import default_plan_path, detect_positions_with_confidence, pixel_to_mm
 from backend.scene_spec import build_equipment_list, empty_scene
 from backend.walls import parse_walls_and_rooms
 
@@ -15,6 +15,7 @@ from backend.walls import parse_walls_and_rooms
 def build_scene_document(
     equipment: Mapping[str, Mapping[str, Any]],
     plan_path: Optional[Path] = None,
+    detected_positions: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     equipment (tag -> row) -> scene dict following backend/scene_spec.py.
@@ -22,7 +23,11 @@ def build_scene_document(
     """
     # Restrict locator to known equipment tags so no unrelated OCR text is used.
     allowed_tags = set(str(t) for t in equipment.keys())
-    detected = detect_positions(plan_path, allowed_tags=allowed_tags)
+    detected = (
+        dict(detected_positions)
+        if detected_positions is not None
+        else detect_positions_with_confidence(plan_path=plan_path, allowed_tags=allowed_tags)
+    )
     pixel_positions: Dict[str, tuple[int, int]] = {}
     conf_map: Dict[str, float] = {}
     for tag, v in detected.items():

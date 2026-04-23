@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, MutableMapping, Optional
 
 import openpyxl
@@ -37,6 +40,92 @@ MAX_UPLOAD_BYTES = 80 * 1024 * 1024  # 80MB soft limit for demo stability
 PIPELINE_TIMEOUT_SECONDS = 120
 _RUNTIME_STATE = RuntimeState()
 
+TASK_QUEUED = "queued"
+TASK_VALIDATING = "validating"
+TASK_PROCESSING_OCR = "processing_ocr"
+TASK_PARSING_LAYOUT = "parsing_layout"
+TASK_BUILDING_GRAPH = "building_graph"
+TASK_RENDERING_SCENE = "rendering_scene"
+TASK_FINALIZING = "finalizing"
+TASK_DONE = "done"
+TASK_FAILED = "failed"
+TASK_CANCELLED = "cancelled"
+
+
+@dataclass
+class PipelineContext:
+    task_id: str
+    signature: str
+    stage: str = TASK_QUEUED
+    cancelled: threading.Event | None = None
+
+
+_TASK_CONTEXTS: Dict[str, PipelineContext] = {}
+_TASK_CTX_LOCK = threading.Lock()
+_TASK_CTX_TTL_S = 8 * 60
+_TASK_CTX_MAX = 20
+_CACHE_STATS: Dict[str, int] = {"hit": 0, "miss": 0}
+
+
+def _prune_task_contexts() -> None:
+    now = time.time()
+    with _TASK_CTX_LOCK:
+        stale = [k for k, v in _TASK_CONTEXTS.items() if (now - v.cancelled._when if getattr(v.cancelled, "_when", None) else now - 0) > _TASK_CTX_TTL_S]  # type: ignore[attr-defined]
+        for k in stale:
+            _TASK_CONTEXTS.pop(k, None)
+        if len(_TASK_CONTEXTS) > _TASK_CTX_MAX:
+            keys = list(_TASK_CONTEXTS.keys())
+            for k in keys[: len(_TASK_CONTEXTS) - _TASK_CTX_MAX]:
+                _TASK_CONTEXTS.pop(k, None)
+
+
+def _register_task_context(task_id: str, signature: str) -> PipelineContext:
+    ev = threading.Event()
+    ctx = PipelineContext(task_id=task_id, signature=signature, cancelled=ev)
+    with _TASK_CTX_LOCK:
+        _TASK_CONTEXTS[task_id] = ctx
+    return ctx
+
+
+def _get_task_context(task_id: str) -> Optional[PipelineContext]:
+    with _TASK_CTX_LOCK:
+        return _TASK_CONTEXTS.get(task_id)
+
+
+def _transition(task_id: str, status: str, progress: int, message: str) -> None:
+    current = _RUNTIME_STATE.get_task(task_id) or {}
+    current_stage = str(current.get("stage") or status)
+    next_stage = current_stage
+    if status in {
+        TASK_QUEUED,
+        TASK_VALIDATING,
+        TASK_PROCESSING_OCR,
+        TASK_PARSING_LAYOUT,
+        TASK_BUILDING_GRAPH,
+        TASK_RENDERING_SCENE,
+        TASK_FINALIZING,
+    }:
+        next_stage = status
+    _RUNTIME_STATE.update_task(task_id, status=status, stage=next_stage, progress=progress, message=message)
+    ctx = _get_task_context(task_id)
+    if ctx is not None:
+        ctx.stage = next_stage
+    audit_event(runtime_dir_path(), "task_transition", {"task_id": task_id, "status": status, "message": message})
+
+
+def _cancelled(ctx: PipelineContext | None) -> bool:
+    if ctx is None or ctx.cancelled is None:
+        return False
+    return ctx.cancelled.is_set()
+
+
+def _pipeline_error(code: str, message: str, stage: str) -> Dict[str, Any]:
+    return {"code": code, "message": message, "stage": stage}
+
+
+def _error_response_struct(code: str, message: str, stage: str, status_code: int = 500) -> Any:
+    return jsonify({"success": False, "error": _pipeline_error(code, message, stage)}), status_code
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -69,7 +158,7 @@ def _path_like_to_json(value: Any) -> Any:
 
 
 def _error_response(message: str, status_code: int = 500) -> Any:
-    return jsonify({"success": False, "error": message}), status_code
+    return _error_response_struct("PIPELINE_ERROR", message, "unknown", status_code)
 
 
 def _pipeline_signature() -> str:
@@ -86,11 +175,20 @@ def _pipeline_signature() -> str:
     return _RUNTIME_STATE.build_signature(paths)
 
 
+def _build_signatures(base_signature: str) -> tuple[str, str, str]:
+    ocr_sig = f"ocr::{base_signature}"
+    layout_sig = f"layout::{base_signature}"
+    graph_sig = f"graph::{base_signature}"
+    return ocr_sig, layout_sig, graph_sig
+
+
 def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     signature = _pipeline_signature()
     cached = _RUNTIME_STATE.get_cached_payload(signature)
     if cached is not None:
+        _CACHE_STATS["hit"] += 1
         return cached
+    _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
     _RUNTIME_STATE.set_cached_payload(signature, payload)
     return payload
@@ -267,6 +365,66 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
         observe_operation(runtime_dir_path(), trace_result)
 
 
+def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
+    task_id = ctx.task_id
+    start = time.time()
+    _transition(task_id, TASK_VALIDATING, 8, "Validating inputs")
+    if _cancelled(ctx):
+        raise RuntimeError("Task cancelled")
+    equipment = load_equipment_from_excel()
+    _transition(task_id, TASK_PROCESSING_OCR, 28, "Running OCR stage")
+    if _cancelled(ctx):
+        raise RuntimeError("Task cancelled")
+    scene_doc = build_scene(equipment)
+    _transition(task_id, TASK_PARSING_LAYOUT, 45, "Parsing layout/walls")
+    if _cancelled(ctx):
+        raise RuntimeError("Task cancelled")
+    relations = build_relations(scene_doc)
+    _transition(task_id, TASK_BUILDING_GRAPH, 65, "Building graph")
+    if _cancelled(ctx):
+        raise RuntimeError("Task cancelled")
+    layout_graph = build_layout_graph(scene_doc, scene_doc.get("walls", []), relations, equipment)
+    _transition(task_id, TASK_RENDERING_SCENE, 82, "Rendering scene payload")
+    if _cancelled(ctx):
+        raise RuntimeError("Task cancelled")
+    walls_doc = {
+        "walls": scene_doc.get("walls", []),
+        "rooms": scene_doc.get("rooms", []),
+        "center": scene_doc.get("center", [0.0, 0.0]),
+    }
+    data_dir = data_dir_path()
+    runtime_dir = runtime_dir_path()
+    pid_links = build_pid_links(layout_graph, data_dir)
+    topology = optimize_topology(layout_graph)
+    source_files = classify_files(data_dir)
+    plant_version = register_snapshot(
+        runtime_dir,
+        plant_id="default-plant",
+        payload={"scene": scene_doc.get("equipment", []), "layout_graph": layout_graph},
+        source_files=source_files,
+    )
+    payload = {
+        "scene": scene_doc.get("equipment", []),
+        "relations": relations,
+        "walls": walls_doc,
+        "layout_graph": layout_graph,
+        "phase_c": {
+            "pid_links": pid_links,
+            "topology_optimization": topology,
+            "multiplant_version": plant_version,
+        },
+    }
+    _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
+    _RUNTIME_STATE.set_cached_payload(ctx.signature, payload)
+    _TASK_STATS["done"] = int(_TASK_STATS["done"]) + 1
+    durations = _TASK_STATS["durations"]
+    if isinstance(durations, list):
+        durations.append(time.time() - start)
+        if len(durations) > 200:
+            del durations[: len(durations) - 200]
+    return payload
+
+
 app = Flask(__name__)
 CORS(
     app,
@@ -403,7 +561,33 @@ def get_plants() -> Any:
 
 @app.get("/api/observability")
 def get_observability_data() -> Any:
-    return jsonify(get_observability(runtime_dir_path()))
+    base = get_observability(runtime_dir_path())
+    rt = _RUNTIME_STATE.observability()
+    return jsonify(
+        {
+            "active_tasks": rt.get("active_tasks", 0),
+            "completed_tasks": rt.get("completed_tasks", 0),
+            "failed_tasks": rt.get("failed_tasks", 0),
+            "cancelled_tasks": rt.get("cancelled_tasks", 0),
+            "cache_hit_rate": rt.get("cache_hit_rate", 0.0),
+            "avg_task_duration": rt.get("avg_task_duration", 0.0),
+            "memory_estimate": rt.get("memory_estimate", "unavailable"),
+            "worker_status": rt.get("worker_status", "healthy"),
+            "task_state_model": [
+                TASK_QUEUED,
+                TASK_VALIDATING,
+                TASK_PROCESSING_OCR,
+                TASK_PARSING_LAYOUT,
+                TASK_BUILDING_GRAPH,
+                TASK_RENDERING_SCENE,
+                TASK_FINALIZING,
+                TASK_DONE,
+                TASK_FAILED,
+                TASK_CANCELLED,
+            ],
+            **base,
+        }
+    )
 
 
 @app.get("/api/walls")
@@ -483,7 +667,15 @@ def upload_project_files() -> Any:
 
     task_id = _RUNTIME_STATE.new_task("Upload received")
     signature = _pipeline_signature()
-    _RUNTIME_STATE.submit_pipeline_task(task_id, input_signature=signature, builder=lambda: build_pipeline_output())
+    ctx = _register_task_context(task_id, signature)
+    ocr_sig, layout_sig, graph_sig = _build_signatures(signature)
+    _RUNTIME_STATE.submit_pipeline_task(
+        task_id,
+        ocr_signature=ocr_sig,
+        layout_signature=layout_sig,
+        graph_signature=graph_sig,
+        builder=lambda: _build_pipeline_dag(ctx),
+    )
     return jsonify({"success": True, "task_id": task_id, "message": "Processing started"})
 
 
@@ -492,6 +684,23 @@ def get_task_status(task_id: str) -> Any:
     rec = _RUNTIME_STATE.get_task(task_id)
     if rec is None:
         return _error_response("Task not found", 404)
+    if rec.get("status") == TASK_FAILED:
+        return jsonify(
+            {
+                "success": False,
+                "task_id": rec.get("task_id"),
+                "status": TASK_FAILED,
+                "progress": rec.get("progress"),
+                "message": rec.get("message"),
+                "error": _pipeline_error(
+                    str(rec.get("error_code") or "PIPELINE_ERROR"),
+                    _classify_pipeline_error(str(rec.get("error") or "")),
+                    str(rec.get("stage") or TASK_FAILED),
+                ),
+                "created_at": rec.get("created_at"),
+                "updated_at": rec.get("updated_at"),
+            }
+        )
     return jsonify({"success": True, **rec})
 
 
@@ -501,6 +710,21 @@ def get_latest_task_status() -> Any:
     if rec is None:
         return jsonify({"success": True, "status": "idle", "progress": 0, "message": "No task yet"})
     return jsonify({"success": True, **rec})
+
+
+@app.post("/api/task/<task_id>/cancel")
+def cancel_task(task_id: str) -> Any:
+    ctx = _get_task_context(task_id)
+    rec = _RUNTIME_STATE.get_task(task_id)
+    if rec is None:
+        return _error_response_struct("TASK_NOT_FOUND", "Task not found", "cancelled", 404)
+    if rec.get("status") in {TASK_DONE, TASK_FAILED, TASK_CANCELLED}:
+        return jsonify({"success": True, "task_id": task_id, "status": rec.get("status"), "message": "Task already terminal"})
+    if ctx and ctx.cancelled:
+        ctx.cancelled.set()
+    _transition(task_id, TASK_CANCELLED, int(rec.get("progress", 0)), "Cancelled by user")
+    _TASK_STATS["cancelled"] = int(_TASK_STATS["cancelled"]) + 1
+    return jsonify({"success": True, "task_id": task_id, "status": TASK_CANCELLED})
 
 
 @app.get("/api/upload/schema")

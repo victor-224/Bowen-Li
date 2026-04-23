@@ -1,4 +1,4 @@
-"""Runtime task and pipeline cache state for stable local demos."""
+"""Runtime task/caching state for stable async demo execution."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -35,12 +35,46 @@ def _files_signature(paths: Mapping[str, Optional[Path]]) -> str:
 class TaskRecord:
     task_id: str
     status: str
+    stage: str
     progress: int
     message: str
     created_at: float
     updated_at: float
     error: Optional[str] = None
+    error_code: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+    duration_ms: Optional[float] = None
+    events: list[Dict[str, Any]] = field(default_factory=list)
+    cancelled: bool = False
+
+
+_STAGE_ORDER = {
+    "queued": 0,
+    "validating": 1,
+    "processing_ocr": 2,
+    "parsing_layout": 3,
+    "building_graph": 4,
+    "rendering_scene": 5,
+    "finalizing": 6,
+    "done": 7,
+    "failed": 8,
+    "cancelled": 9,
+}
+
+
+def _stage_progress(stage: str) -> int:
+    return {
+        "queued": 0,
+        "validating": 10,
+        "processing_ocr": 25,
+        "parsing_layout": 45,
+        "building_graph": 65,
+        "rendering_scene": 82,
+        "finalizing": 95,
+        "done": 100,
+        "failed": 100,
+        "cancelled": 100,
+    }.get(stage, 0)
 
 
 class RuntimeState:
@@ -51,13 +85,25 @@ class RuntimeState:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline-worker")
         self._tasks: Dict[str, TaskRecord] = {}
         self._latest_task_id: Optional[str] = None
-        self._cache_payload: Optional[Dict[str, Any]] = None
-        self._cache_signature: Optional[str] = None
-        self._cache_at: float = 0.0
-        self._cache_ttl_s: int = 30
-        self._max_tasks: int = 64
+        self._max_tasks: int = 20
+        self._task_ttl_s: int = 600
+        # Multi-layer cache
+        self._ocr_cache: Dict[str, Dict[str, Any]] = {}
+        self._layout_cache: Dict[str, Dict[str, Any]] = {}
+        self._graph_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+        self._completed_count: int = 0
+        self._failed_count: int = 0
+        self._cancelled_count: int = 0
+        self._total_duration_ms: float = 0.0
+        self._worker_status: str = "healthy"
 
     def _prune_tasks_unlocked(self) -> None:
+        now = time.time()
+        expired = [tid for tid, rec in self._tasks.items() if (now - rec.updated_at) > self._task_ttl_s]
+        for tid in expired:
+            self._tasks.pop(tid, None)
         if len(self._tasks) <= self._max_tasks:
             return
         ordered = sorted(self._tasks.values(), key=lambda x: x.updated_at)
@@ -71,11 +117,13 @@ class RuntimeState:
         rec = TaskRecord(
             task_id=task_id,
             status="queued",
+            stage="queued",
             progress=0,
             message=message,
             created_at=now,
             updated_at=now,
         )
+        rec.events.append({"time": now, "stage": "queued", "message": message})
         with self._lock:
             self._tasks[task_id] = rec
             self._latest_task_id = task_id
@@ -87,9 +135,11 @@ class RuntimeState:
         task_id: str,
         *,
         status: Optional[str] = None,
+        stage: Optional[str] = None,
         progress: Optional[int] = None,
         message: Optional[str] = None,
         error: Optional[str] = None,
+        error_code: Optional[str] = None,
         result: Optional[Dict[str, Any]] = None,
     ) -> None:
         with self._lock:
@@ -98,15 +148,56 @@ class RuntimeState:
                 return
             if status is not None:
                 rec.status = status
+            if stage is not None:
+                rec.stage = stage
+                rec.progress = _stage_progress(stage)
+                rec.events.append({"time": time.time(), "stage": stage, "message": message or rec.message})
             if progress is not None:
                 rec.progress = max(0, min(100, int(progress)))
             if message is not None:
                 rec.message = message
             if error is not None:
                 rec.error = error
+            if error_code is not None:
+                rec.error_code = error_code
             if result is not None:
                 rec.result = result
+            if rec.status in {"done", "failed", "cancelled"} and rec.duration_ms is None:
+                rec.duration_ms = max(0.0, (time.time() - rec.created_at) * 1000.0)
+                self._total_duration_ms += rec.duration_ms
+                if rec.status == "done":
+                    self._completed_count += 1
+                elif rec.status == "failed":
+                    self._failed_count += 1
+                else:
+                    self._cancelled_count += 1
             rec.updated_at = time.time()
+            self._prune_tasks_unlocked()
+
+    def set_stage(self, task_id: str, stage: str, message: str) -> None:
+        status = "running"
+        if stage == "done":
+            status = "done"
+        elif stage == "failed":
+            status = "failed"
+        elif stage == "cancelled":
+            status = "cancelled"
+        self.update_task(task_id, status=status, stage=stage, message=message)
+
+    def cancel_task(self, task_id: str) -> bool:
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            if rec is None:
+                return False
+            rec.cancelled = True
+            rec.updated_at = time.time()
+            rec.events.append({"time": rec.updated_at, "stage": "cancelled", "message": "Cancellation requested"})
+            return True
+
+    def is_cancelled(self, task_id: str) -> bool:
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            return bool(rec.cancelled) if rec else False
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -116,11 +207,15 @@ class RuntimeState:
             return {
                 "task_id": rec.task_id,
                 "status": rec.status,
+                "stage": rec.stage,
                 "progress": rec.progress,
                 "message": rec.message,
                 "error": rec.error,
+                "error_code": rec.error_code,
+                "duration_ms": rec.duration_ms,
                 "created_at": rec.created_at,
                 "updated_at": rec.updated_at,
+                "events": list(rec.events[-20:]),
             }
 
     def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -140,9 +235,12 @@ class RuntimeState:
             return {
                 "task_id": rec.task_id,
                 "status": rec.status,
+                "stage": rec.stage,
                 "progress": rec.progress,
                 "message": rec.message,
                 "error": rec.error,
+                "error_code": rec.error_code,
+                "duration_ms": rec.duration_ms,
                 "created_at": rec.created_at,
                 "updated_at": rec.updated_at,
             }
@@ -151,41 +249,95 @@ class RuntimeState:
         self,
         task_id: str,
         *,
-        input_signature: str,
+        ocr_signature: str,
+        layout_signature: str,
+        graph_signature: str,
         builder: Callable[[], Dict[str, Any]],
     ) -> None:
         def _job() -> None:
-            self.update_task(task_id, status="running", progress=10, message="Preparing pipeline")
+            self.set_stage(task_id, "validating", "Validating files")
             try:
-                self.update_task(task_id, progress=25, message="Running OCR and scene generation")
+                if self.is_cancelled(task_id):
+                    self.set_stage(task_id, "cancelled", "Task cancelled")
+                    return
+                self.set_stage(task_id, "processing_ocr", "Running OCR")
+                if self.is_cancelled(task_id):
+                    self.set_stage(task_id, "cancelled", "Task cancelled")
+                    return
+                self.set_stage(task_id, "parsing_layout", "Parsing layout")
+                if self.is_cancelled(task_id):
+                    self.set_stage(task_id, "cancelled", "Task cancelled")
+                    return
+                self.set_stage(task_id, "building_graph", "Building graph")
+                if self.is_cancelled(task_id):
+                    self.set_stage(task_id, "cancelled", "Task cancelled")
+                    return
+                self.set_stage(task_id, "rendering_scene", "Rendering scene payload")
                 payload = builder()
-                self.update_task(task_id, progress=90, message="Finalizing output")
                 with self._lock:
-                    self._cache_payload = payload
-                    self._cache_signature = input_signature
-                    self._cache_at = time.time()
-                self.update_task(task_id, status="done", progress=100, message="Completed", result=payload)
+                    self._ocr_cache[ocr_signature] = payload
+                    self._layout_cache[layout_signature] = payload
+                    self._graph_cache[graph_signature] = payload
+                self.set_stage(task_id, "finalizing", "Finalizing")
+                self.update_task(task_id, status="done", stage="done", message="Completed", result=payload)
             except Exception as e:  # noqa: BLE001 - structured error output
-                self.update_task(task_id, status="error", progress=100, message="Failed", error=str(e))
+                self.update_task(
+                    task_id,
+                    status="failed",
+                    stage="failed",
+                    message="Failed",
+                    error=str(e),
+                    error_code="PIPELINE_ERROR",
+                )
 
         self._executor.submit(_job)
 
-    def get_cached_payload(self, input_signature: str) -> Optional[Dict[str, Any]]:
+    def get_cached_payload(
+        self,
+        *,
+        ocr_signature: str,
+        layout_signature: str,
+        graph_signature: str,
+    ) -> Optional[Dict[str, Any]]:
         with self._lock:
-            if self._cache_payload is None:
-                return None
-            if self._cache_signature != input_signature:
-                return None
-            if (time.time() - self._cache_at) > self._cache_ttl_s:
-                return None
-            return dict(self._cache_payload)
+            if graph_signature in self._graph_cache:
+                self._cache_hits += 1
+                return dict(self._graph_cache[graph_signature])
+            if layout_signature in self._layout_cache:
+                self._cache_hits += 1
+                return dict(self._layout_cache[layout_signature])
+            if ocr_signature in self._ocr_cache:
+                self._cache_hits += 1
+                return dict(self._ocr_cache[ocr_signature])
+            self._cache_misses += 1
+            return None
 
-    def set_cached_payload(self, input_signature: str, payload: Dict[str, Any]) -> None:
+    def set_cached_payload(self, *, ocr_signature: str, layout_signature: str, graph_signature: str, payload: Dict[str, Any]) -> None:
         with self._lock:
-            self._cache_payload = dict(payload)
-            self._cache_signature = input_signature
-            self._cache_at = time.time()
+            data = dict(payload)
+            self._ocr_cache[ocr_signature] = data
+            self._layout_cache[layout_signature] = data
+            self._graph_cache[graph_signature] = data
 
     def build_signature(self, paths: Mapping[str, Optional[Path]]) -> str:
         return _files_signature(paths)
+
+    def observability(self) -> Dict[str, Any]:
+        with self._lock:
+            active = sum(1 for r in self._tasks.values() if r.status in {"queued", "running"})
+            completed = self._completed_count
+            failed = self._failed_count
+            total_cache = self._cache_hits + self._cache_misses
+            cache_hit_rate = float(self._cache_hits / total_cache) if total_cache > 0 else 0.0
+            avg_duration = float(self._total_duration_ms / completed) if completed > 0 else 0.0
+            return {
+                "active_tasks": active,
+                "completed_tasks": completed,
+                "failed_tasks": failed,
+                "cancelled_tasks": self._cancelled_count,
+                "cache_hit_rate": round(cache_hit_rate, 4),
+                "avg_task_duration": round(avg_duration, 3),
+                "memory_estimate": f"tasks={len(self._tasks)} ocr_cache={len(self._ocr_cache)} layout_cache={len(self._layout_cache)} graph_cache={len(self._graph_cache)}",
+                "worker_status": self._worker_status,
+            }
 
