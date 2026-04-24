@@ -105,6 +105,35 @@
         <h2>AI Copilot</h2>
         <p>Assisted answers from the local model (optional).</p>
       </div>
+      <div class="card ai-settings-card" id="ai-settings-card">
+        <h3 class="ai-settings-title">AI settings</h3>
+        <label class="ai-label" for="ai-lm-url">LM Studio endpoint</label>
+        <input type="url" id="ai-lm-url" class="ai-url-input" placeholder="http://localhost:1234/v1/chat/completions" autocomplete="off" />
+        <p class="ai-hint">Full OpenAI-compatible chat URL (must include <code>/v1/chat/completions</code>). Saved on this machine under <code>data/runtime/ai_config.json</code>.</p>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-vision">Vision model</label>
+          <input type="text" id="ai-model-vision" class="ai-url-input" placeholder="qwen2.5-vl-7b-instruct" />
+        </div>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-copilot">Copilot model</label>
+          <input type="text" id="ai-model-copilot" class="ai-url-input" placeholder="qwen3-8b-instruct" />
+        </div>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-reasoning">Reasoning model</label>
+          <input type="text" id="ai-model-reasoning" class="ai-url-input" placeholder="deepseek-r1-distill-qwen-8b" />
+        </div>
+        <div class="ai-toolbar">
+          <button type="button" class="btn-primary" id="ai-save-btn">Save configuration</button>
+          <button type="button" class="btn-secondary" id="ai-test-btn">Test connection</button>
+        </div>
+        <p class="ai-hint" id="ai-test-msg" aria-live="polite"></p>
+        <div class="ai-status-block" id="ai-status-block" aria-live="polite">
+          <div><span class="status-k">Endpoint</span> <span id="ai-status-endpoint">—</span></div>
+          <div><span class="status-k">Copilot model</span> <code id="ai-status-copilot-model">—</code></div>
+          <div><span class="status-k">Vision model</span> <code id="ai-status-vision-model">—</code></div>
+          <div><span class="status-k">Status</span> <strong id="ai-status-state">unknown</strong></div>
+        </div>
+      </div>
       <textarea
         id="copilot-input"
         placeholder="Ask about your plant layout…"

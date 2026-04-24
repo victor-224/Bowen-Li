@@ -2,6 +2,8 @@
 
 Safe infrastructure-only layer. Does not modify pipeline, scene, OCR,
 state machine, or API routes. Never raises outward.
+
+URL is always resolved via backend.config (env + optional runtime JSON).
 """
 
 from __future__ import annotations
@@ -14,8 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-
-LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions"
+from backend.config import get_lm_studio_chat_url, get_models_for_role
 
 MODELS: List[str] = [
     "qwen2.5-vl-7b-instruct",
@@ -25,6 +26,11 @@ MODELS: List[str] = [
 ]
 
 logger = logging.getLogger("industrial_digital_twin.llm.lmstudio")
+
+
+def lm_studio_url() -> str:
+    """Current effective chat completions URL (for tests and diagnostics)."""
+    return get_lm_studio_chat_url()
 
 
 def _is_offline(exc: BaseException) -> bool:
@@ -77,6 +83,7 @@ def _safe_extract_content(raw: Dict[str, Any]) -> str:
 
 
 def _post_chat(
+    url: str,
     model: str,
     messages: List[Dict[str, Any]],
     temperature: float,
@@ -92,7 +99,7 @@ def _post_chat(
     }
     body = json.dumps(payload).encode("utf-8")
     req = urlrequest.Request(
-        LM_STUDIO_URL,
+        url,
         data=body,
         method="POST",
         headers={
@@ -112,6 +119,7 @@ def _post_chat(
 
 
 def _attempt_with_retry(
+    url: str,
     model: str,
     messages: List[Dict[str, Any]],
     temperature: float,
@@ -122,16 +130,26 @@ def _attempt_with_retry(
     last_exc: Optional[BaseException] = None
     for attempt in (1, 2):
         try:
-            raw = _post_chat(model, messages, temperature, max_tokens, timeout)
+            raw = _post_chat(url, model, messages, temperature, max_tokens, timeout)
             return True, raw, None
         except urlerror.HTTPError as e:
             last_exc = e
-            logger.warning("LM Studio HTTPError model=%s attempt=%d status=%s", model, attempt, getattr(e, "code", "?"))
+            logger.warning(
+                "LM Studio HTTPError model=%s attempt=%d status=%s",
+                model,
+                attempt,
+                getattr(e, "code", "?"),
+            )
             if getattr(e, "code", 500) and int(getattr(e, "code", 500)) < 500:
                 break
         except (urlerror.URLError, TimeoutError, socket.timeout) as e:
             last_exc = e
-            logger.warning("LM Studio URLError model=%s attempt=%d reason=%r", model, attempt, getattr(e, "reason", e))
+            logger.warning(
+                "LM Studio URLError model=%s attempt=%d reason=%r",
+                model,
+                attempt,
+                getattr(e, "reason", e),
+            )
             if _is_offline(e):
                 return False, None, e
         except (json.JSONDecodeError, ValueError) as e:
@@ -143,14 +161,33 @@ def _attempt_with_retry(
     return False, None, last_exc
 
 
+def _fallback_order(model: str, role: Optional[str]) -> List[str]:
+    if role:
+        base = get_models_for_role(role)
+    else:
+        base = list(MODELS)
+    out: List[str] = []
+    for m in [model] + base:
+        if m not in out:
+            out.append(m)
+    return out
+
+
 def call_lmstudio_model(
     model: str,
     messages: List[Dict[str, Any]],
     temperature: float = 0.2,
     timeout: int = 25,
     max_tokens: int = 512,
+    *,
+    role: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call LM Studio with retry + fallback. Never raises outward.
+
+    ``role`` (optional): ``vision`` | ``copilot`` | ``reasoning`` — affects fallback model order.
+
+    ``base_url`` (optional): full chat completions URL; defaults to :func:`get_lm_studio_chat_url`.
 
     Returns a strict envelope:
       success: {"model", "content", "raw", "success": True}
@@ -161,29 +198,20 @@ def call_lmstudio_model(
     if not isinstance(messages, list):
         return {"success": False, "error": "LM_STUDIO_BAD_REQUEST"}
 
-    # 1) requested model with 1 retry
-    logger.info("LM Studio attempt model=%s", model)
-    ok, raw, err = _attempt_with_retry(model, messages, temperature, max_tokens, timeout)
-    if ok and raw is not None:
-        return {
-            "model": model,
-            "content": _safe_extract_content(raw),
-            "raw": raw,
-            "success": True,
-        }
-    if err is not None and _is_offline(err):
-        logger.warning("LM Studio offline on first contact model=%s", model)
-        return {"success": False, "error": "LM_STUDIO_OFFLINE"}
+    url = (base_url or "").strip() or get_lm_studio_chat_url()
+    order = _fallback_order(str(model), role)
 
-    # 2) full fallback list skipping the already-tried requested model
-    last_tried = model
-    last_err = err
-    for candidate in MODELS:
-        if candidate == model:
-            continue
+    last_tried = str(model)
+    last_err: Optional[BaseException] = None
+    for idx, candidate in enumerate(order):
         last_tried = candidate
-        logger.info("LM Studio fallback attempt model=%s", candidate)
-        ok, raw, err = _attempt_with_retry(candidate, messages, temperature, max_tokens, timeout)
+        if idx == 0:
+            logger.info("LM Studio attempt model=%s role=%s", candidate, role or "-")
+        else:
+            logger.info("LM Studio fallback attempt model=%s", candidate)
+        ok, raw, err = _attempt_with_retry(
+            url, candidate, messages, temperature, max_tokens, timeout
+        )
         if ok and raw is not None:
             return {
                 "model": candidate,
@@ -193,8 +221,8 @@ def call_lmstudio_model(
             }
         last_err = err
         if err is not None and _is_offline(err):
-            logger.warning("LM Studio offline during fallback model=%s", candidate)
-            return {"success": False, "error": "LM_STUDIO_OFFLINE"}
+            logger.warning("LM Studio offline model=%s", candidate)
+            return {"success": False, "error": "LM_STUDIO_OFFLINE", "fallback": True}
 
     logger.warning("LM Studio all models failed last=%s last_err=%r", last_tried, last_err)
     return {
@@ -202,7 +230,8 @@ def call_lmstudio_model(
         "error": "LM_STUDIO_ALL_MODELS_FAILED",
         "model": last_tried,
         "raw": {},
+        "fallback": True,
     }
 
 
-__all__ = ["LM_STUDIO_URL", "MODELS", "call_lmstudio_model"]
+__all__ = ["MODELS", "call_lmstudio_model", "lm_studio_url"]

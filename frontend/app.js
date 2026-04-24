@@ -35,6 +35,17 @@ const statusCompletedLine = document.getElementById("status-completed-line");
 const copilotInput = document.getElementById("copilot-input");
 const copilotOutput = document.getElementById("copilot-output");
 const copilotSend = document.getElementById("copilot-send");
+const aiLmUrlInput = document.getElementById("ai-lm-url");
+const aiModelVisionInput = document.getElementById("ai-model-vision");
+const aiModelCopilotInput = document.getElementById("ai-model-copilot");
+const aiModelReasoningInput = document.getElementById("ai-model-reasoning");
+const aiSaveBtn = document.getElementById("ai-save-btn");
+const aiTestBtn = document.getElementById("ai-test-btn");
+const aiTestMsg = document.getElementById("ai-test-msg");
+const aiStatusEndpoint = document.getElementById("ai-status-endpoint");
+const aiStatusCopilotModel = document.getElementById("ai-status-copilot-model");
+const aiStatusVisionModel = document.getElementById("ai-status-vision-model");
+const aiStatusState = document.getElementById("ai-status-state");
 
 let activeTaskId = null;
 let _entrySeq = 0;
@@ -507,6 +518,93 @@ function copilotOffline() {
   copilotAppend("AI Copilot unavailable (local model offline).");
 }
 
+async function refreshAiStatusPanel() {
+  if (!aiStatusEndpoint) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/ai/status`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.success) {
+      aiStatusState.textContent = "unknown";
+      return;
+    }
+    aiStatusEndpoint.textContent = d.endpoint || "—";
+    aiStatusCopilotModel.textContent = d.copilot_model || "—";
+    aiStatusVisionModel.textContent = d.vision_model || "—";
+    aiStatusState.textContent = d.status === "connected" ? "connected" : "offline";
+  } catch {
+    if (aiStatusState) aiStatusState.textContent = "unknown";
+  }
+}
+
+async function loadAiConfigForm() {
+  if (!aiLmUrlInput) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/ai/config`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.success) return;
+    aiLmUrlInput.value = d.lm_studio_url || "";
+    const m = d.models || {};
+    if (aiModelVisionInput) aiModelVisionInput.value = m.vision || "";
+    if (aiModelCopilotInput) aiModelCopilotInput.value = m.copilot || "";
+    if (aiModelReasoningInput) aiModelReasoningInput.value = m.reasoning || "";
+  } catch {
+    // leave defaults
+  }
+  await refreshAiStatusPanel();
+}
+
+async function saveAiConfiguration() {
+  if (!aiLmUrlInput) return;
+  const payload = {
+    lm_studio_url: (aiLmUrlInput.value || "").trim(),
+    model_vision: (aiModelVisionInput && aiModelVisionInput.value) ? aiModelVisionInput.value.trim() : "",
+    model_copilot: (aiModelCopilotInput && aiModelCopilotInput.value) ? aiModelCopilotInput.value.trim() : "",
+    model_reasoning: (aiModelReasoningInput && aiModelReasoningInput.value) ? aiModelReasoningInput.value.trim() : "",
+  };
+  if (aiTestMsg) aiTestMsg.textContent = "Saving…";
+  try {
+    const r = await fetch(`${API_BASE}/api/ai/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.success) {
+      if (aiTestMsg) aiTestMsg.textContent = d.error || `Save failed (${r.status})`;
+      return;
+    }
+    if (aiTestMsg) aiTestMsg.textContent = "Configuration saved.";
+    await loadAiConfigForm();
+  } catch (e) {
+    if (aiTestMsg) aiTestMsg.textContent = String(e.message || e);
+  }
+}
+
+async function testAiConnection() {
+  if (!aiLmUrlInput) return;
+  const url = (aiLmUrlInput.value || "").trim();
+  if (aiTestMsg) aiTestMsg.textContent = "Testing…";
+  try {
+    const r = await fetch(`${API_BASE}/api/ai/test-connection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lm_studio_url: url || undefined }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (d.status === "connected" && Array.isArray(d.models)) {
+      if (aiTestMsg) {
+        const preview = d.models.slice(0, 5).join(", ");
+        aiTestMsg.textContent = `Connected. Models: ${preview}${d.models.length > 5 ? "…" : ""}`;
+      }
+    } else {
+      if (aiTestMsg) aiTestMsg.textContent = "Offline or unreachable. Check LM Studio and URL.";
+    }
+    await refreshAiStatusPanel();
+  } catch (e) {
+    if (aiTestMsg) aiTestMsg.textContent = String(e.message || e);
+  }
+}
+
 async function callCopilot(message) {
   const m = (message || "").trim();
   if (!m) return;
@@ -523,16 +621,19 @@ async function callCopilot(message) {
     const data = await res.json().catch(() => ({}));
     if (data && data.success && typeof data.content === "string" && data.content) {
       copilotAppend(data.content);
+      await refreshAiStatusPanel();
       return;
     }
     const err = (data && data.error) || "";
-    if (String(err).toUpperCase().includes("LM_STUDIO") || res.status >= 500) {
+    if (String(err).toUpperCase().includes("LM_STUDIO") || String(err).toUpperCase().includes("OFFLINE") || res.status >= 500) {
       copilotOffline();
     } else {
       copilotAppend(String(data.error || "Unable to get a response. Check that the app server is running."));
     }
+    await refreshAiStatusPanel();
   } catch {
     copilotOffline();
+    await refreshAiStatusPanel();
   } finally {
     copilotLoading = false;
   }
@@ -910,6 +1011,11 @@ async function handleUploadClick() {
   }
 }
 
+function wireAiSettings() {
+  if (aiSaveBtn) aiSaveBtn.addEventListener("click", () => saveAiConfiguration());
+  if (aiTestBtn) aiTestBtn.addEventListener("click", () => testAiConnection());
+}
+
 function wireCopilot() {
   document.getElementById("copilot-actions")?.addEventListener("click", (ev) => {
     const t = ev.target;
@@ -927,7 +1033,9 @@ function wireCopilot() {
 
 async function main() {
   wireFileUi();
+  wireAiSettings();
   wireCopilot();
+  await loadAiConfigForm();
   if (fileChips) {
     fileChips.innerHTML = "";
     updateLoadedSummary();

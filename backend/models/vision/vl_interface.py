@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from backend.llm.lmstudio_client import call_lmstudio_model, LM_STUDIO_URL
+from backend.config import get_lm_studio_chat_url
+from backend.llm.lmstudio_client import call_lmstudio_model
 
 logger = logging.getLogger("industrial_digital_twin.vision")
 
@@ -28,6 +29,7 @@ __all__ = ["image_to_base64", "run_vision_model", "call_lmstudio_model"]
 
 
 def _post_chat(
+    url: str,
     model: str,
     messages: List[Dict[str, Any]],
     temperature: float,
@@ -44,7 +46,7 @@ def _post_chat(
     }
     body = json.dumps(payload).encode("utf-8")
     req = urlrequest.Request(
-        LM_STUDIO_URL,
+        url,
         data=body,
         method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -91,6 +93,7 @@ def _safe_extract_content(raw: Dict[str, Any]) -> str:
 
 
 def _attempt_with_retry(
+    url: str,
     model: str,
     messages: List[Dict[str, Any]],
     temperature: float,
@@ -102,7 +105,7 @@ def _attempt_with_retry(
     for attempt in (1, 2):
         try:
             raw = _post_chat(
-                model, messages, temperature, max_tokens, timeout
+                url, model, messages, temperature, max_tokens, timeout
             )
             return True, raw, last_offline
         except urlerror.HTTPError as e:
@@ -312,6 +315,7 @@ def run_vision_model(
     data_url = f"data:{_mime_for_path(str(image_path))};base64,{b64}"
     messages = _user_message(str(prompt or ""), data_url)
 
+    chat_url = get_lm_studio_chat_url()
     seq = _model_sequence(model)
     any_offline = False
     for idx, m in enumerate(seq):
@@ -320,7 +324,7 @@ def run_vision_model(
         else:
             logger.warning("vision: fallback activation model=%s", m)
         ok, raw, offline = _attempt_with_retry(
-            m, messages, temperature, max_tokens, timeout
+            chat_url, m, messages, temperature, max_tokens, timeout
         )
         if offline:
             any_offline = True
@@ -372,7 +376,7 @@ if __name__ == "__main__":
 
     _calls: List[str] = []
 
-    def _side_b(model, messages, t, mxt, to):
+    def _side_b(_url, model, messages, t, mxt, to):
         _calls.append(model)
         if model == "qwen2.5-vl-7b-instruct":
             return (False, None, False)
