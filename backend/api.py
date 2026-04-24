@@ -16,6 +16,7 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, MutableMapping, Optional
 
+import cv2
 import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -41,6 +42,7 @@ from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 from backend.plan_upload_validate import validate_layout_raster
 from backend.layout_inspector import inspect_runtime_layout
+from backend.opencv_util import opencv_imread_quiet
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -189,6 +191,56 @@ def runtime_excel_path() -> Path:
 
 def data_dir_path() -> Path:
     return _repo_root() / "data"
+
+
+def _is_runtime_excel_corrupted(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size < 1024:
+            return True
+    except OSError:
+        return True
+    try:
+        return not zipfile.is_zipfile(path)
+    except OSError:
+        return True
+
+
+def _is_runtime_plan_corrupted(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size < 1024:
+            return True
+    except OSError:
+        return True
+    with opencv_imread_quiet():
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return img is None
+
+
+def _sanitize_runtime_inputs_on_startup() -> None:
+    """Remove clearly corrupted runtime artifacts to avoid boot-time failures."""
+    rt_excel = runtime_excel_path()
+    if _is_runtime_excel_corrupted(rt_excel):
+        try:
+            rt_excel.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except TypeError:
+            if rt_excel.is_file():
+                rt_excel.unlink()
+        except OSError:
+            pass
+
+    rt_plan = runtime_plan_path()
+    if _is_runtime_plan_corrupted(rt_plan):
+        try:
+            rt_plan.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except TypeError:
+            if rt_plan.is_file():
+                rt_plan.unlink()
+        except OSError:
+            pass
 
 
 def _path_like_to_json(value: Any) -> Any:
@@ -342,7 +394,7 @@ def _excel_path() -> Path:
 
 def plan_image_path() -> Path:
     runtime_plan = runtime_plan_path()
-    if runtime_plan.is_file():
+    if runtime_plan.is_file() and not _is_runtime_plan_corrupted(runtime_plan):
         return runtime_plan
     classified = classify_files(data_dir_path())
     layout_src = classified.get("layout")
@@ -594,6 +646,8 @@ CORS(
     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
     supports_credentials=True,
 )
+
+_sanitize_runtime_inputs_on_startup()
 
 _COPILOT_LOG = logging.getLogger("industrial_digital_twin.copilot")
 _AI_CFG_LOG = logging.getLogger("industrial_digital_twin.ai_config")
