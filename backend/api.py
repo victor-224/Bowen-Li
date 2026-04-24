@@ -34,10 +34,15 @@ from backend.config import (
     get_lm_studio_chat_url,
     lm_studio_url_from_env,
 )
+from backend.core.policy_engine import resolve_policy
+from backend.core.spatial_truth_ledger import summarize_truth_status
+from backend.core.spatial_payload import sanitize_spatial_payload
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
+from backend.plan_upload_validate import validate_layout_raster
+from backend.layout_inspector import inspect_runtime_layout
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -66,6 +71,15 @@ _VISION_PROMPT = (
 _VISION_TIMEOUT_S = 20
 
 _RUNTIME_STATE = RuntimeState()
+_UPLOAD_LOG = logging.getLogger("industrial_digital_twin.upload")
+
+# Reduce OpenCV console noise (libpng may still print at ERROR level on corrupt reads).
+try:
+    import cv2.utils.logging as _cv2_log
+
+    _cv2_log.setLogLevel(_cv2_log.LOG_LEVEL_SILENT)
+except Exception:  # noqa: BLE001
+    pass
 
 TASK_QUEUED = "queued"
 TASK_VALIDATING = "validating"
@@ -207,14 +221,53 @@ def _pipeline_signature() -> str:
     return _RUNTIME_STATE.build_signature(paths)
 
 
+def _positions_cache_path() -> Path:
+    return runtime_dir_path() / "positions_cache.json"
+
+
+def _invalidate_spatial_runtime_cache(*, clear_positions: bool = False) -> Dict[str, Any]:
+    """Invalidate runtime caches that can preserve stale spatial state."""
+    cleared_payloads = _RUNTIME_STATE.clear_pipeline_cache()
+    cleared_positions = False
+    if clear_positions:
+        p = _positions_cache_path()
+        if p.is_file():
+            try:
+                p.unlink()
+                cleared_positions = True
+            except OSError:
+                cleared_positions = False
+    return {"payload_cache_cleared": int(cleared_payloads), "positions_cache_cleared": bool(cleared_positions)}
+
+
+def _layout_upload_validation_message(reason: str) -> str:
+    r = (reason or "").strip()
+    if r == "invalid_png_signature":
+        return (
+            "Uploaded layout is not a valid PNG file (wrong file header). "
+            "Export the drawing as PNG or upload PDF instead."
+        )
+    if r == "invalid_jpeg_signature":
+        return "Uploaded layout is not a valid JPEG file. Re-export the image or use PDF/PNG."
+    if r == "opencv_decode_failed":
+        return (
+            "Layout image could not be decoded (file may be truncated, renamed, or not an image). "
+            "Re-upload a real PNG/JPEG or use PDF."
+        )
+    if r == "file_is_pdf_not_image":
+        return "Layout file was saved as image but content looks like PDF. Upload it as plan_file with .pdf extension."
+    return f"Layout validation failed ({r or 'unknown'})."
+
+
 def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     signature = _pipeline_signature()
     cached = _RUNTIME_STATE.get_cached_payload(signature)
     if cached is not None:
         _CACHE_STATS["hit"] += 1
-        return cached
+        return sanitize_spatial_payload(cached, route="cache_hit")
     _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
+    payload = sanitize_spatial_payload(payload, route="cache_store")
     _RUNTIME_STATE.set_cached_payload(signature=signature, payload=payload)
     return payload
 
@@ -431,11 +484,31 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "version_id": plant_version.get("version_id"),
             },
         )
+        meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
+        authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
+        preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
         payload: Dict[str, Any] = {
             "scene": scene_doc.get("equipment", []),
             "relations": relations,
             "walls": walls_doc,
             "layout_graph": layout_graph,
+            "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
+            "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+            "spatial_decision_summary": {
+                "preflight_valid": bool(preflight.get("valid")),
+                "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
+                "authority_reason": str(authority.get("reason") or ""),
+                "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
+            },
+            "policy": resolve_policy(
+                contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
+                ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
+                runtime_context={
+                    "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
+                    "input_state": scene_doc.get("meta", {}).get("input_state"),
+                },
+            ),
+            "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
             "phase_c": {
                 "pid_links": pid_links,
                 "topology_optimization": topology,
@@ -443,7 +516,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             },
         }
         _maybe_attach_vision(payload)
-        return payload
+        return sanitize_spatial_payload(payload, route="build_pipeline_output")
     except Exception:
         status = "error"
         raise
@@ -490,11 +563,31 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         source_files=source_files,
     )
     _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
+    meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
+    authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
+    preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
     payload = {
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
         "walls": walls_doc,
         "layout_graph": layout_graph,
+        "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
+        "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+        "spatial_decision_summary": {
+            "preflight_valid": bool(preflight.get("valid")),
+            "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
+            "authority_reason": str(authority.get("reason") or ""),
+            "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
+        },
+        "policy": resolve_policy(
+            contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
+            ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
+            runtime_context={
+                "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
+                "input_state": scene_doc.get("meta", {}).get("input_state"),
+            },
+        ),
+        "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
         "phase_c": {
             "pid_links": pid_links,
             "topology_optimization": topology,
@@ -502,6 +595,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         },
     }
     _maybe_attach_vision(payload)
+    payload = sanitize_spatial_payload(payload, route="build_pipeline_dag")
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
@@ -823,8 +917,9 @@ def get_equipment() -> Any:
         data = load_equipment_from_excel()
     except FileNotFoundError as e:
         return _error_response(str(e), 404)
-    except ValueError as e:
-        return _error_response(str(e), 500)
+    except Exception as e:  # noqa: BLE001
+        code, stage = _classify_pipeline_error_code(str(e))
+        return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 400)
     return jsonify(data)
 
 
@@ -870,6 +965,13 @@ def get_files() -> Any:
     classified = classify_files(data_dir_path())
     out: Dict[str, Any] = {k: _path_like_to_json(v) for k, v in classified.items()}
     return jsonify(out)
+
+
+@app.get("/api/layout/inspect")
+def get_layout_inspect() -> Any:
+    """Upload File Inspector: health of committed runtime plan.png (no pipeline run)."""
+    info = inspect_runtime_layout(runtime_plan_path())
+    return jsonify({"success": True, "layout_inspector": info})
 
 
 @app.get("/api/status")
@@ -997,6 +1099,7 @@ def upload_project_files() -> Any:
 
     plan_saved = False
     excel_saved = False
+    plan_uploaded = False
     for field, storage in files:
         name = (storage.filename or "").lower()
         if not name:
@@ -1005,14 +1108,71 @@ def upload_project_files() -> Any:
         if field == "plan_file" or name.endswith((".png", ".jpg", ".jpeg", ".pdf")):
             target = runtime_dir / f"uploaded_layout{Path(name).suffix}"
             storage.save(target)
+            plan_uploaded = True
             if target.suffix.lower() == ".pdf":
                 try:
                     first_page_to_layout_png(target, runtime_plan_path())
+                    ok_pdf, reason_pdf, _wh_pdf = validate_layout_raster(runtime_plan_path())
+                    if not ok_pdf:
+                        rp = runtime_plan_path()
+                        try:
+                            rp.unlink(missing_ok=True)  # type: ignore[call-arg]
+                        except TypeError:
+                            if rp.is_file():
+                                rp.unlink()
+                        _UPLOAD_LOG.warning(
+                            "[SPATIAL_TRACE] layout pdf render invalid reason=%s file=%s",
+                            reason_pdf,
+                            name,
+                        )
+                        return _error_response_struct(
+                            "INVALID_LAYOUT_IMAGE",
+                            _layout_upload_validation_message(reason_pdf),
+                            TASK_VALIDATING,
+                            400,
+                        )
                     plan_saved = True
                 except Exception as e:
                     return _error_response(f"Invalid layout PDF: {e}", 400)
             else:
+                ok, reason, _wh = validate_layout_raster(target)
+                if not ok:
+                    try:
+                        target.unlink(missing_ok=True)  # type: ignore[call-arg]
+                    except TypeError:
+                        if target.is_file():
+                            target.unlink()
+                    _UPLOAD_LOG.warning(
+                        "[SPATIAL_TRACE] layout rejected before commit reason=%s file=%s",
+                        reason,
+                        name,
+                    )
+                    return _error_response_struct(
+                        "INVALID_LAYOUT_IMAGE",
+                        _layout_upload_validation_message(reason),
+                        TASK_VALIDATING,
+                        400,
+                    )
                 runtime_plan_path().write_bytes(target.read_bytes())
+                plan_rt = runtime_plan_path()
+                ok2, reason2, _wh2 = validate_layout_raster(plan_rt)
+                if not ok2:
+                    try:
+                        plan_rt.unlink(missing_ok=True)  # type: ignore[call-arg]
+                    except TypeError:
+                        if plan_rt.is_file():
+                            plan_rt.unlink()
+                    _UPLOAD_LOG.warning(
+                        "[SPATIAL_TRACE] runtime plan invalid after copy reason=%s file=%s",
+                        reason2,
+                        name,
+                    )
+                    return _error_response_struct(
+                        "INVALID_LAYOUT_IMAGE",
+                        _layout_upload_validation_message(reason2),
+                        TASK_VALIDATING,
+                        400,
+                    )
                 plan_saved = True
             continue
 
@@ -1044,6 +1204,8 @@ def upload_project_files() -> Any:
     if not (plan_saved and excel_saved):
         return _error_response("Missing required layout and/or excel file after upload", 400)
 
+    cache_info = _invalidate_spatial_runtime_cache(clear_positions=plan_uploaded)
+
     task_id = _RUNTIME_STATE.new_task("Upload received")
     signature = _pipeline_signature()
     ctx = _register_task_context(task_id, signature)
@@ -1052,7 +1214,16 @@ def upload_project_files() -> Any:
         signature=signature,
         builder=lambda: _build_pipeline_dag(ctx),
     )
-    return jsonify({"success": True, "task_id": task_id, "status": TASK_QUEUED, "message": "Processing started"})
+    return jsonify(
+        {
+            "success": True,
+            "task_id": task_id,
+            "status": TASK_QUEUED,
+            "message": "Processing started",
+            "cache": cache_info,
+            "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
+        }
+    )
 
 
 @app.get("/api/task/<task_id>")

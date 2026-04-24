@@ -46,6 +46,17 @@ const aiStatusEndpoint = document.getElementById("ai-status-endpoint");
 const aiStatusCopilotModel = document.getElementById("ai-status-copilot-model");
 const aiStatusVisionModel = document.getElementById("ai-status-vision-model");
 const aiStatusState = document.getElementById("ai-status-state");
+const layoutInspectorEl = document.getElementById("layout-inspector");
+const inspectorFileEl = document.getElementById("inspector-file");
+const inspectorTypeEl = document.getElementById("inspector-type");
+const inspectorResolutionEl = document.getElementById("inspector-resolution");
+const inspectorDecodeEl = document.getElementById("inspector-decode");
+const inspectorReadableEl = document.getElementById("inspector-readable");
+const inspectorSpatialEl = document.getElementById("inspector-spatial");
+const inspectorNoteEl = document.getElementById("inspector-note");
+
+/** Avoid duplicate SPATIAL_TRACE lines when refreshScene runs repeatedly while blocked. */
+let _spatialBlockLogged = false;
 
 let activeTaskId = null;
 let _entrySeq = 0;
@@ -314,13 +325,81 @@ function updateLoadedSummary() {
   loadedNamesEl.textContent = `${n} file(s) · Plan: ${plan ? plan.name : "—"} · Excel: ${excel ? excel.name : "—"}`;
 }
 
+function formatUploadError(body, httpStatus) {
+  const err = body && body.error;
+  if (err && typeof err === "object" && err.message) {
+    const code = err.code != null ? String(err.code) : "ERROR";
+    return `${code}: ${String(err.message)}`;
+  }
+  if (typeof err === "string" && err) return err;
+  return `HTTP ${httpStatus}`;
+}
+
+/**
+ * Used for spatial: only Yes/No after spatial contract is known; "—" while pipeline has not applied contract yet.
+ * @param {object} info - layout_inspector + optional spatial_contract_scene_allowed, spatial_contract_pending
+ */
+function usedForSpatialDisplay(info) {
+  const sc = info.spatial_contract_scene_allowed;
+  if (info.spatial_contract_pending || sc === undefined) {
+    return "—";
+  }
+  if (sc === false) return "No";
+  return info.used_for_spatial ? "Yes" : "No";
+}
+
+/**
+ * @param {object | null | undefined} info - from API layout_inspector
+ */
+function updateLayoutInspectorPanel(info) {
+  if (!layoutInspectorEl) return;
+  if (!info || typeof info !== "object" || !info.exists) {
+    layoutInspectorEl.hidden = true;
+    if (inspectorNoteEl) inspectorNoteEl.hidden = true;
+    return;
+  }
+  layoutInspectorEl.hidden = false;
+  const shortPath = String(info.layout_file || "").split(/[/\\]/).pop() || "plan.png";
+  if (inspectorFileEl) inspectorFileEl.textContent = shortPath;
+  const magic = info.magic_detected || info.file_type || "—";
+  if (inspectorTypeEl) inspectorTypeEl.textContent = String(magic).toUpperCase();
+  if (inspectorResolutionEl) inspectorResolutionEl.textContent = info.resolution || "—";
+  if (inspectorDecodeEl) inspectorDecodeEl.textContent = info.decode_ok ? "OK" : "Fail";
+  if (inspectorReadableEl) inspectorReadableEl.textContent = info.readable ? "Yes" : "No";
+  if (inspectorSpatialEl) inspectorSpatialEl.textContent = usedForSpatialDisplay(info);
+  if (inspectorNoteEl) {
+    const sc = info.spatial_contract_scene_allowed;
+    if (info.spatial_contract_pending || sc === undefined) {
+      inspectorNoteEl.textContent =
+        "Pipeline running or contract not loaded yet — \"Used for spatial\" shows Yes/No only after the spatial contract is applied.";
+      inspectorNoteEl.hidden = false;
+    } else if (sc === false) {
+      inspectorNoteEl.textContent =
+        "Spatial contract: scene not using layout coordinates (equipment-only / degraded).";
+      inspectorNoteEl.hidden = false;
+    } else if (info.validation_reason && !info.validation_ok) {
+      inspectorNoteEl.textContent = `Validation: ${info.validation_reason}`;
+      inspectorNoteEl.hidden = false;
+    } else {
+      inspectorNoteEl.textContent = "";
+      inspectorNoteEl.hidden = true;
+    }
+  }
+}
+
 async function uploadProjectFiles() {
   const form = buildUploadForm();
   const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success !== true) {
-    const reason = body.error || `HTTP ${res.status}`;
+    const reason = formatUploadError(body, res.status);
     throw new Error(`Upload failed: ${reason}`);
+  }
+  if (body.layout_inspector) {
+    updateLayoutInspectorPanel({
+      ...body.layout_inspector,
+      spatial_contract_pending: true,
+    });
   }
   return body;
 }
@@ -764,6 +843,12 @@ function normalizeSceneItems(sceneDoc) {
   return [];
 }
 
+function isSpatialSceneAllowed(pipelineDoc) {
+  const c = pipelineDoc && pipelineDoc.spatial_contract;
+  if (!c || typeof c !== "object") return true;
+  return Boolean(c.scene_allowed);
+}
+
 function updateInfoPanel(row) {
   if (!row) {
     infoTagEl.textContent = "—";
@@ -903,14 +988,24 @@ async function refreshScene() {
   const wallsDoc = pipeline.walls || {};
   const relationsDoc = pipeline.relations || {};
   const meta = sceneDoc.meta || sceneDoc?.scene?.meta || {};
-  const items = normalizeSceneItems(sceneDoc);
+  const sceneAllowed = isSpatialSceneAllowed(pipeline);
+  const items = sceneAllowed ? normalizeSceneItems(sceneDoc) : [];
   const wallsCount = Array.isArray(wallsDoc.walls)
     ? wallsDoc.walls.length
     : Array.isArray(sceneDoc.walls)
       ? sceneDoc.walls.length
       : 0;
   const relCount = typeof relationsDoc === "object" ? Object.keys(relationsDoc).length : 0;
-  sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"}`;
+  const modeNote = sceneAllowed ? "Spatial mode: scene enabled" : "Equipment Only Mode — No spatial scene available";
+  sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"} · ${modeNote}`;
+  if (!sceneAllowed) {
+    if (!_spatialBlockLogged) {
+      pushLog("[SPATIAL_TRACE] frontend blocked fake render (scene_allowed=false)", "warn");
+      _spatialBlockLogged = true;
+    }
+  } else {
+    _spatialBlockLogged = false;
+  }
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);
   const box = new THREE.Box3().setFromObject(threeCtx.equipmentGroup);
@@ -922,6 +1017,39 @@ async function refreshScene() {
     threeCtx.camera.lookAt(center);
     threeCtx.controls.target.copy(center);
     threeCtx.controls.update();
+  }
+  const scKnown =
+    pipeline.spatial_contract &&
+    typeof pipeline.spatial_contract === "object" &&
+    pipeline.spatial_contract.scene_allowed !== undefined &&
+    pipeline.spatial_contract.scene_allowed !== null;
+
+  if (pipeline.layout_inspector) {
+    const merged = {
+      ...pipeline.layout_inspector,
+      spatial_contract_pending: !scKnown,
+    };
+    if (scKnown) {
+      merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
+    }
+    updateLayoutInspectorPanel(merged);
+  } else {
+    try {
+      const inspRes = await fetch(`${API_BASE}/api/layout/inspect`);
+      const inspBody = await inspRes.json().catch(() => ({}));
+      if (inspBody.success && inspBody.layout_inspector) {
+        const merged = {
+          ...inspBody.layout_inspector,
+          spatial_contract_pending: !scKnown,
+        };
+        if (scKnown) {
+          merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
+        }
+        updateLayoutInspectorPanel(merged);
+      }
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -986,7 +1114,9 @@ async function handleUploadClick() {
     let userMsg = msg;
     if (msg.includes("OCR_FAILED")) userMsg = "OCR failed: no equipment tags detected in layout.";
     else if (msg.includes("INVALID_EXCEL")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
-    else if (msg.includes("INVALID_LAYOUT")) userMsg = "No layout detected or unreadable plan image.";
+    else if (msg.includes("INVALID_LAYOUT_IMAGE")) {
+      userMsg = msg.replace(/^Upload failed:\s*/i, "").replace(/^INVALID_LAYOUT_IMAGE:\s*/i, "");
+    } else if (msg.includes("INVALID_LAYOUT")) userMsg = "No layout detected or unreadable plan image.";
     else if (msg.includes("UPLOAD_TOO_LARGE") || msg.includes("upload too large")) {
       userMsg = "Upload too large. Please use smaller files.";
     } else if (msg.includes("CANCELLED")) userMsg = "Task cancelled.";

@@ -101,6 +101,8 @@ def _tool_validate_layout(args: Dict[str, Any], runtime_state: Any) -> Dict[str,
     from backend.api import SHEET_NAME, load_equipment_from_excel
     import cv2
 
+    from backend.opencv_util import opencv_imread_quiet
+
     issues: List[str] = []
     if not _runtime_excel().is_file():
         issues.append("equipment.xlsx missing")
@@ -112,7 +114,8 @@ def _tool_validate_layout(args: Dict[str, Any], runtime_state: Any) -> Dict[str,
     if not _runtime_plan().is_file():
         issues.append("plan.png missing")
     else:
-        img = cv2.imread(str(_runtime_plan()), cv2.IMREAD_COLOR)
+        with opencv_imread_quiet():
+            img = cv2.imread(str(_runtime_plan()), cv2.IMREAD_COLOR)
         if img is None:
             issues.append("plan.png unreadable")
     return {"ok": len(issues) == 0, "issues": issues}
