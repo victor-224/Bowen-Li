@@ -26,6 +26,7 @@ from backend.core.spatial_source_normalizer import normalize_spatial_sources
 from backend.core.spatial_canonical_model import build_canonical_space
 from backend.core.spatial_authority import resolve_spatial_authority
 from backend.core.spatial_preflight import validate_spatial_consistency
+from backend.core.spatial_input_unifier import unify_spatial_input
 from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -256,20 +257,17 @@ def build_scene_document(
 
     conf_map: Dict[str, float] = {}
 
-    normalized = normalize_spatial_sources(raw_points)
-
-    with opencv_imread_quiet():
-        _img_dims = cv2.imread(str(safe_plan), cv2.IMREAD_COLOR)
     plan_width_mm = 17500.0
-    if _img_dims is None:
-        canonical = []
-        image_shape: tuple[int, int] | None = None
-    else:
-        _h, _w = _img_dims.shape[:2]
-        image_shape = (_w, _h)
-        canonical = build_canonical_space(normalized, image_shape, plan_width_mm=plan_width_mm)
-
-    positions_full = pixel_to_mm(pixel_positions, safe_plan)
+    unified = unify_spatial_input(
+        raw_points,
+        pixel_positions,
+        plan_path=safe_plan,
+        plan_width_mm=plan_width_mm,
+    )
+    normalized = list(unified.get("normalized", []))
+    canonical = list(unified.get("canonical", []))
+    positions_full = dict(unified.get("layout_points", {}))
+    image_shape = unified.get("image_shape")
     cluster_mm: Dict[str, tuple[float, float]] = {}
     for tag, v in detected.items():
         if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
@@ -277,7 +275,7 @@ def build_scene_document(
                 cluster_mm[tag] = positions_full[tag]
 
     preflight = validate_spatial_consistency(
-        list(canonical),
+        canonical,
         positions_full,
         normalized_points=normalized,
         image_shape=image_shape,

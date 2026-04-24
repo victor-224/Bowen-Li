@@ -75,7 +75,7 @@ def validate_spatial_consistency(
     normalized_points: Optional[Sequence[Mapping[str, Any]]] = None,
     image_shape: Optional[Tuple[int, int]] = None,
     plan_width_mm: float = 17500.0,
-    variance_threshold_mmsq: float = 25.0,
+    variance_threshold_mmsq: float = 5.0,
     zero_ratio_threshold: float = 0.40,
 ) -> Dict[str, Any]:
     """
@@ -127,10 +127,14 @@ def validate_spatial_consistency(
         valid = False
         collapse_risk = "HIGH"
         issues.append(f"zero_layout_ratio_{zero_ratio:.2f}")
-    if len(layout_xy) >= 2 and var < variance_threshold_mmsq:
+    if len(layout_xy) >= 3 and var < variance_threshold_mmsq:
         valid = False
         collapse_risk = "HIGH"
         issues.append(f"low_spatial_variance_{var:.4f}")
+    elif len(layout_xy) == 2 and var < 1.0:
+        valid = False
+        collapse_risk = "HIGH"
+        issues.append(f"low_spatial_variance_pair_{var:.4f}")
 
     # Per-tag anchor agreement (same transform chain): large drift ⇒ inconsistent inputs.
     max_drift = 0.0
