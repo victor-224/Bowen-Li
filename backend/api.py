@@ -34,9 +34,6 @@ from backend.config import (
     get_lm_studio_chat_url,
     lm_studio_url_from_env,
 )
-from backend.core.policy_engine import resolve_policy
-from backend.core.spatial_truth_ledger import summarize_truth_status
-from backend.core.spatial_payload import sanitize_spatial_payload
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
@@ -264,10 +261,9 @@ def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] =
     cached = _RUNTIME_STATE.get_cached_payload(signature)
     if cached is not None:
         _CACHE_STATS["hit"] += 1
-        return sanitize_spatial_payload(cached, route="cache_hit")
+        return cached
     _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
-    payload = sanitize_spatial_payload(payload, route="cache_store")
     _RUNTIME_STATE.set_cached_payload(signature=signature, payload=payload)
     return payload
 
@@ -493,22 +489,6 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "walls": walls_doc,
             "layout_graph": layout_graph,
             "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
-            "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
-            "spatial_decision_summary": {
-                "preflight_valid": bool(preflight.get("valid")),
-                "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
-                "authority_reason": str(authority.get("reason") or ""),
-                "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
-            },
-            "policy": resolve_policy(
-                contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
-                ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
-                runtime_context={
-                    "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
-                    "input_state": scene_doc.get("meta", {}).get("input_state"),
-                },
-            ),
-            "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
             "phase_c": {
                 "pid_links": pid_links,
                 "topology_optimization": topology,
@@ -516,7 +496,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             },
         }
         _maybe_attach_vision(payload)
-        return sanitize_spatial_payload(payload, route="build_pipeline_output")
+        return payload
     except Exception:
         status = "error"
         raise
@@ -563,31 +543,12 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         source_files=source_files,
     )
     _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
-    meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
-    authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
-    preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
     payload = {
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
         "walls": walls_doc,
         "layout_graph": layout_graph,
         "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
-        "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
-        "spatial_decision_summary": {
-            "preflight_valid": bool(preflight.get("valid")),
-            "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
-            "authority_reason": str(authority.get("reason") or ""),
-            "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
-        },
-        "policy": resolve_policy(
-            contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
-            ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
-            runtime_context={
-                "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
-                "input_state": scene_doc.get("meta", {}).get("input_state"),
-            },
-        ),
-        "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
         "phase_c": {
             "pid_links": pid_links,
             "topology_optimization": topology,
@@ -595,7 +556,6 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         },
     }
     _maybe_attach_vision(payload)
-    payload = sanitize_spatial_payload(payload, route="build_pipeline_dag")
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
