@@ -17,6 +17,7 @@ from backend.asset_contract import (
     AssetContractViolation,
     load_asset,
 )
+from backend.core.execution_policy import resolve_execution_policy
 from backend.core.input_contract import evaluate_input_contract
 from backend.engines.geometry import geometry_engine
 from backend.locator import detect_positions_with_confidence, pixel_to_mm
@@ -52,6 +53,7 @@ def _degraded_empty_layout(
             "warning": warning,
             "input_state": contract.get("state", "degraded_layout"),
             "input_contract": contract,
+            "execution_policy": contract.get("execution_policy"),
         }
     )
     scene["equipment"] = items
@@ -89,10 +91,11 @@ def build_scene_document(
             layout_image=None,
             plan_path=None,
         )
+        policy = resolve_execution_policy(contract)
         return _degraded_empty_layout(
             equipment,
             warning="missing_demo_asset",
-            input_contract=contract,
+            input_contract={**contract, "execution_policy": policy},
         )
     if safe_load_image(str(safe_plan)) is None:
         logger.warning(
@@ -106,10 +109,11 @@ def build_scene_document(
             layout_image=str(safe_plan),
             plan_path=str(safe_plan),
         )
+        policy = resolve_execution_policy(contract)
         return _degraded_empty_layout(
             equipment,
             warning="missing_demo_asset",
-            input_contract=contract,
+            input_contract={**contract, "execution_policy": policy},
         )
 
     # Evaluate contract with resolved plan path so state is explicit and accurate.
@@ -118,6 +122,7 @@ def build_scene_document(
         layout_image=str(safe_plan),
         plan_path=str(safe_plan),
     )
+    policy = resolve_execution_policy(contract)
 
     allowed_tags = set(str(t) for t in equipment.keys())
     detected = (
@@ -149,6 +154,7 @@ def build_scene_document(
     scene.setdefault("meta", {})
     scene["meta"]["input_state"] = contract.get("state", "valid")
     scene["meta"]["input_contract"] = contract
+    scene["meta"]["execution_policy"] = policy
     return geometry_engine(scene)
 
 
