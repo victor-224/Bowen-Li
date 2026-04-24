@@ -1,344 +1,184 @@
-# 🌐 Industrial Digital Twin System / Système de Jumeau Numérique Industriel  
-# 工业数字孪生系统
+# Industrial Digital Twin System
+
+**AI-enhanced local industrial digital twin platform** that converts plans, documents, and equipment data into interactive layouts, relation graphs, and a Three.js scene—with an optional local LLM / vision layer. Everything runs on your machine; no cloud dependency for core workflows.
+
+![Python](https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-API-000000?logo=flask&logoColor=white)
+![Three.js](https://img.shields.io/badge/Three.js-3D-000000?logo=threedotjs&logoColor=white)
+![OCR](https://img.shields.io/badge/OCR-EasyOCR-2ea44f)
+![Local AI](https://img.shields.io/badge/Local%20AI-LM%20Studio-6366f1)
+![LM Studio](https://img.shields.io/badge/LM%20Studio-OpenAI%20compatible-8b5cf6)
+![Async Pipeline](https://img.shields.io/badge/Async-Pipeline-1f6feb)
 
 ---
 
-## 📌 One-line Overview / Résumé en une phrase / 一句话概览
+## Demo preview
 
-🇨🇳 将工业二维图纸（PDF/PNG）与 Excel 设备数据自动转换为可交互 3D 工业数字孪生系统。  
-🇫🇷 Transformation automatique des plans industriels 2D (PDF/PNG) et des données Excel en système 3D interactif de jumeau numérique industriel.
+Screenshots can be dropped into `docs/images/` (or repo root) when available.
 
----
+| Placeholder | Suggested capture |
+|---------------|-------------------|
+| **Dashboard UI** | `TODO: docs/images/dashboard.png` — main layout with status + scene |
+| **Upload workflow** | `TODO: docs/images/upload.png` — unified dropzone + file tags |
+| **Scene viewer** | `TODO: docs/images/scene.png` — Three.js equipment view |
+| **AI Copilot** | `TODO: docs/images/copilot.png` — sidebar + response |
 
-## 🧭 System Pipeline / Pipeline système / 工业数据流（Mermaid）
-
-```mermaid
-flowchart LR
-  dataFolder["📁 data folder"] --> fileClassifier["🔍 Auto File Classifier"]
-  fileClassifier --> pdfParser["📄 PDF Layout Parser"]
-  fileClassifier --> excelEngine["📊 Excel Semantic Engine"]
-  pdfParser --> ocrDetect["👁 OCR Spatial Detection"]
-  excelEngine --> semanticMap["🧠 Equipment Semantic Mapping"]
-  ocrDetect --> sceneBuilder["🏗 Scene Builder"]
-  semanticMap --> sceneBuilder
-  sceneBuilder --> layoutGraph["🧩 Layout Graph Engine"]
-  layoutGraph --> constraintsLayer["⚙️ Constraint & Topology Layer"]
-  constraintsLayer --> renderer["🎮 Three.js 3D Renderer"]
-  renderer --> dashboard["🌐 Web Visualization Dashboard"]
+```markdown
+<!-- Example when files exist:
+![Dashboard](docs/images/dashboard.png)
+-->
 ```
 
 ---
 
-## 🏗 System Architecture / Architecture système / 系统架构（Mermaid）
+## Key features
 
-```mermaid
-flowchart TB
-  subgraph backend [Backend]
-    apiServer["API Server"]
-    fileClassifier["File Classifier"]
-    pdfOcr["PDF + OCR Engine"]
-    excelParser["Excel Parser"]
-    sceneBuilder["Scene Builder"]
-  end
-
-  subgraph aiLayer [AI Layer]
-    spatialReasoning["Spatial Reasoning Engine"]
-    graphGenerator["Layout Graph Generator"]
-    topologySolver["Topology Constraint Solver"]
-    pidFuture["P&ID Module (Future)"]
-  end
-
-  subgraph frontend [Frontend]
-    threeRenderer["Three.js Renderer"]
-    graphUi["Graph Visualization UI"]
-    dashboard["Interactive Dashboard"]
-  end
-
-  apiServer --> fileClassifier --> pdfOcr --> excelParser --> sceneBuilder
-  sceneBuilder --> spatialReasoning --> graphGenerator --> topologySolver --> pidFuture
-  pidFuture --> threeRenderer --> graphUi --> dashboard
-```
+- **Unified multi-file upload** — Drag-and-drop or browse; smart tags (layout, equipment list, supporting docs); optional manual overrides.
+- **OCR + layout parsing** — Plan PDF/PNG/JPEG → layout processing and spatial tag detection where supported.
+- **Equipment extraction from Excel** — `Equipment_list` sheet → structured equipment rows fused with layout/OCR.
+- **Graph relationship generation** — Layout graph (nodes, edges, zones, constraints) plus spatial relations.
+- **Scene rendering / visualization** — Three.js viewer with equipment meshes and selection details.
+- **Async task engine** — `POST /api/upload` returns immediately with a `task_id`; background pipeline with structured states.
+- **Structured error handling** — API errors with codes, messages, and stage context; UI maps common failures to readable text.
+- **Deterministic cache** — Single-signature cache for identical pipeline inputs (demo stability).
+- **Runtime asset contract** — Validated lifecycle for key assets (e.g. plan image) with clear missing/corrupted errors.
+- **Local AI Copilot (optional)** — `POST /api/copilot` uses LM Studio (OpenAI-compatible chat); UI fails gracefully when offline; answers can include **project context** (equipment, graph, scene, vision, last task error) when data is loaded.
+- **Optional vision enrichment** — Set `ENABLE_VISION=true` to attach a normalized vision payload to the pipeline output when a local VLM is available (`qwen2.5-vl-7b-instruct` path in backend).
+- **Fully local-first** — Flask API + static frontend + local models only; no required external SaaS.
 
 ---
 
-## 📡 API Overview / Vue API / 接口总览
+## System architecture
 
 ```text
-┌────────────────────────────────────┐
-│ GET /api/pipeline                  │
-├────────────────────────────────────┤
-│ Full digital twin output           │
-│ Scene + Graph + Constraints        │
-└────────────────────────────────────┘
-```
-
-```text
-┌────────────────────────────────────┐
-│ GET /api/layout_graph              │
-├────────────────────────────────────┤
-│ Semantic graph (nodes/edges/zones)│
-└────────────────────────────────────┘
-```
-
-```text
-┌────────────────────────────────────┐
-│ POST /api/upload                   │
-├────────────────────────────────────┤
-│ Upload PDF/Excel → Auto pipeline   │
-└────────────────────────────────────┘
+Frontend UI (HTML / CSS / JS + Three.js)
+        │
+        ▼
+   Flask REST API
+        │
+        ▼
+ Async pipeline (upload → validate → OCR → layout → graph → scene → finalize)
+        │
+        ├── OCR / PDF / Excel parsing
+        ├── Walls / relations / layout graph
+        └── Scene document generation
+        │
+        ▼ (optional)
+ Local LLM / VLM (LM Studio) — Copilot chat + optional vision on pipeline payload
 ```
 
 ---
 
-## ✅ Current System Features / Fonctionnalités actuelles / 当前系统能力
+## Quick start
 
-### 1️⃣ Smart File Classification / Classification intelligente des fichiers / 智能文件识别
-
-🇨🇳 用户只需将文件放入 `data/`，系统自动识别 `layout / excel / reference / gad / structure`。  
-🇫🇷 Il suffit de déposer les fichiers dans `data/`, le système identifie automatiquement `layout / excel / reference / gad / structure`.
-
-- ✔ 无需改名 / sans renommage
-- ✔ 支持中英法命名 / noms chinois-anglais-français supportés
-- ✔ 自动分类 / classification automatique
-
-### 2️⃣ PDF Parsing Engine / Moteur d’analyse PDF / PDF 图纸解析
-
-🇨🇳 支持 PDF 转图像、多页拆分、首页布局选择、runtime 缓存。  
-🇫🇷 Conversion PDF→image, découpage multi-pages, sélection de la première page comme layout, cache runtime.
-
-### 3️⃣ OCR Positioning / Positionnement OCR / OCR 设备定位
-
-🇨🇳 自动识别设备 Tag（如 B200/E100/P001A），输出 `position / confidence / source`。  
-🇫🇷 Détection automatique des tags équipement (B200/E100/P001A) avec sortie `position / confidence / source`.
-
-### 4️⃣ Excel Semantic Fusion / Fusion sémantique Excel / Excel 语义融合
-
-🇨🇳 解析 `tag/service/diameter/length/height/position`，用于属性绑定与工艺语义。  
-🇫🇷 Analyse `tag/service/diameter/length/height/position` pour liaison d’attributs et sémantique de procédé.
-
-### 5️⃣ Layout Graph Core / Noyau Layout Graph / Layout Graph 核心
-
-🇨🇳 系统输出结构化工业语义图：  
-🇫🇷 Le système produit un graphe sémantique industriel structuré :
-
-```json
-{
-  "nodes": [],
-  "edges": [],
-  "zones": [],
-  "constraints": [],
-  "walls": {}
-}
-```
-
----
-
-## 📁 Data Folder Policy / Politique du dossier data / 数据目录规则
-
-🇨🇳 用户可自由命名并放入：PDF/PNG/JPG/JPEG/XLSX。  
-🇫🇷 Les fichiers peuvent être nommés librement : PDF/PNG/JPG/JPEG/XLSX.
-
-支持类型 / Types pris en charge:
-- layout（布局图）
-- excel（设备表）
-- reference（参考资料）
-- gad（标准图）
-- structure（结构图）
-
-系统会自动分类并写入 `data/runtime/` 缓存。  
-Le système classe automatiquement et écrit le cache dans `data/runtime/`.
-
----
-
-## 🚀 Quick Start (Windows) / Démarrage rapide (Windows) / Windows 快速启动
-
-### 1) Install dependencies / Installer les dépendances / 安装依赖
+### 1. Install dependencies
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 2) Start demo (recommended) / Démarrer la démo (recommandé) / 启动演示（推荐）
+Use Python 3.10+ recommended (match your environment).
+
+### 2. Run the backend
 
 ```bash
 python run.py
 ```
 
-Or double click / Ou double-cliquer / 或双击：
+The API listens on **http://localhost:5000** (no Flask reloader in this entry point for stable local runs).
 
-```text
-start_demo.bat
-```
+### 3. Open the frontend
 
-### 3) Open browser / Ouvrir le navigateur / 打开浏览器
-
-- `http://localhost:3000`
-
-### Upload categories (demo UX) / Catégories d’upload (UX démo) / 上传分类说明
-
-- **Required / Requis / 必填**
-  - `layout` (PDF/PNG/JPG/JPEG): floor/layout drawing used by OCR + wall parsing
-  - `excel` (XLSX): equipment attributes table
-- **Optional / Optionnel / 可选**
-  - `reference` (PDF): additional technical docs, consumed by Phase C P&ID linking
-  - `structure` (PDF/PNG/JPG/JPEG): reserved for structure-specific parsing extensions
-- **Developer-only (hidden in UI) / Développeur seulement (masqué UI) / 开发项（前端隐藏）**
-  - `gad` (PDF): currently used only by backend classifier/P&ID helper, not required for demo path
-
-### Manual fallback / Démarrage manuel / 手动启动方式
+From another terminal, in the repository root:
 
 ```bash
-python -m backend.api
-cd frontend
-python -m http.server 3000
+python -m http.server 3000 -d frontend
 ```
 
----
+Open **http://localhost:3000** in your browser.
 
-## 🧭 End-to-End Flow / Flux bout-en-bout / 全链路流程
+**Windows one-liner (optional):** double-click `start_demo.bat` — starts backend, static server on 3000, and opens the browser.
 
-1. 🇨🇳 把文件放进 `data/`（任意命名）  
-   🇫🇷 Déposer les fichiers dans `data/` (nommage libre)
-2. 🇨🇳 启动后端与前端  
-   🇫🇷 Démarrer backend et frontend
-3. 🇨🇳 打开网页并点击「加载项目」  
-   🇫🇷 Ouvrir la page et cliquer « Charger le projet »
-4. 🇨🇳 系统自动执行：文件识别→PDF转图→OCR定位→Excel融合→墙体解析→关系计算→Graph生成→Three.js更新  
-   🇫🇷 Exécution automatique : classification→PDF→OCR→fusion Excel→murs→relations→graphe→rendu Three.js
+### 4. Optional — LM Studio (Copilot + vision)
 
----
+1. Install [LM Studio](https://lmstudio.ai/) and start the local server (default chat port `1234`).
+2. Load a compatible chat model (see **AI models** below). Copilot uses the text API; vision uses multimodal models when `ENABLE_VISION` is enabled.
+3. If LM Studio is off, the app still runs; Copilot shows an offline notice.
 
-## 🌐 API Overview / Vue d’ensemble API / API接口总览
+### 5. Upload and process
 
-### 基础接口 / API de base / Basic APIs
+Use **Load & process** after adding at least a layout file (PDF/PNG/JPEG) and/or equipment `.xlsx` as required by your demo data. The UI shows pipeline status, progress, and errors in plain language.
 
-- `GET /api/files` — 🇨🇳 当前识别文件 / 🇫🇷 fichiers classifiés
-- `GET /api/status` — 🇨🇳 完整性状态 / 🇫🇷 état de complétude
-- `POST /api/upload` — 🇨🇳 上传并重算 / 🇫🇷 upload + recalcul
-- `GET /api/task/<task_id>` — 🇨🇳 后台任务状态 / 🇫🇷 statut de tâche asynchrone
-- `GET /api/task/latest` — 🇨🇳 最近一次任务状态 / 🇫🇷 dernier statut de tâche
-
-### 语义接口 / API sémantiques / Semantic APIs
-
-- `GET /api/scene` — 🇨🇳 场景数据 / 🇫🇷 données de scène
-- `GET /api/walls` — 🇨🇳 墙体房间中心 / 🇫🇷 murs, salles, centre
-- `GET /api/relations` — 🇨🇳 空间关系 / 🇫🇷 relations spatiales
-- `GET /api/layout_graph` — 🇨🇳 语义图结构 / 🇫🇷 structure de graphe sémantique
-- `GET /api/pipeline` — 🇨🇳 统一输出 / 🇫🇷 sortie unifiée
-
-### Phase C 接口 / API Phase C / Phase C APIs
-
-- `GET /api/pid_links` — 🇨🇳 P&ID 关联结果 / 🇫🇷 liens d’intégration P&ID
-- `GET /api/topology` — 🇨🇳 拓扑约束诊断与建议 / 🇫🇷 diagnostic et recommandations topologiques
-- `GET /api/plants` — 🇨🇳 多工厂版本清单 / 🇫🇷 registre de versions multi-usines
-- `GET /api/observability` — 🇨🇳 指标追踪审计 / 🇫🇷 métriques, traces et audit
+**Health check:** `GET http://localhost:5000/health`
 
 ---
 
-## 🧩 API Response Cards / Cartes de réponse API / API响应示例
+## AI models (optional)
 
-### `GET /api/pipeline`
+The system **does not require** local LLMs. When enabled, typical compatible models include:
 
-```json
-{
-  "scene": [
-    {
-      "tag": "B200",
-      "service": "Reactor / Settler",
-      "position_mm": [8210.4, 12250.2],
-      "dimensions": { "diameter": 5300, "length": null, "height": 14200 },
-      "confidence": 0.93
-    }
-  ],
-  "relations": {
-    "B200_left_of_P001A": true,
-    "distance_B200_P001A": 3.2
-  },
-  "walls": {
-    "walls": [],
-    "rooms": [],
-    "center": [8750.0, 8750.0]
-  },
-  "layout_graph": {
-    "nodes": [],
-    "edges": [],
-    "zones": [],
-    "constraints": []
-  },
-  "phase_c": {
-    "pid_links": {},
-    "topology_optimization": {},
-    "multiplant_version": {
-      "version_id": "v1"
-    }
-  }
-}
-```
+| Model | Role |
+|--------|------|
+| **Qwen2.5-VL 7B** | Vision / layout-style questions (optional `ENABLE_VISION`) |
+| **InternVL3.5 8B** | Vision fallback in adapter chain |
+| **DeepSeek R1 Distill Qwen 8B** | General reasoning (adapter list) |
+| **Qwen3 8B** | Default **Copilot** chat backend |
 
-### `GET /api/layout_graph`
-
-```json
-{
-  "nodes": [],
-  "edges": [],
-  "zones": [],
-  "constraints": [],
-  "walls": {}
-}
-```
+Exact model IDs match your LM Studio download names. Copilot and vision are **best-effort**; the industrial pipeline remains the source of truth.
 
 ---
 
-## 🖥️ Frontend UI / Interface Frontend / 前端展示能力
+## Use cases
 
-🇨🇳 支持上传面板、Three.js 实时渲染、设备点击详情、Zone/Edge 可视化与右侧信息栏。  
-🇫🇷 Prise en charge du panneau d’upload, rendu Three.js temps réel, détails par clic, visualisation Zone/Edge et panneau d’information.
-
----
-
-## 🧪 Industrial Notes / Notes industrielles / 工业运行说明
-
-- 🇨🇳 图纸优先，Excel 补属性；🇫🇷 priorité au plan, Excel pour les attributs
-- 🇨🇳 零命名依赖；🇫🇷 aucune dépendance de nommage
-- 🇨🇳 反复换文件可自动重算；🇫🇷 recalcul automatique après remplacement des fichiers
-- 🇨🇳 无 GUI 环境下 OCR 失败返回结构化错误；🇫🇷 en mode headless, retour d’erreur structurée si OCR échoue
+- **Factory layout digitization** — Turn PDF/plan raster + equipment lists into a navigable scene and graph.
+- **Equipment mapping** — Correlate tags from drawings with Excel attributes.
+- **Engineering demo platform** — Local-only demo for stakeholders without deploying cloud infra.
+- **AI-assisted plant review** — Copilot summarizes loaded data, risks, or failures using **project context** when available.
+- **Portfolio / student project** — Shows full-stack + async + optional AI integration in one repo.
 
 ---
 
-## 🛣️ Roadmap / Feuille de route / 路线图
+## Roadmap (near-term)
 
-### Phase A（已完成 / Terminé）
-- 自动文件分类 / Classification auto
-- PDF转图 / PDF→image
-- OCR定位 + fallback
-- Excel语义融合 / Fusion sémantique Excel
-- 墙体房间解析 / Analyse murs-salles
-- 关系引擎 / Moteur de relations
-- Layout Graph 基础结构
-
-### Phase B（已完成 / Terminé）
-- OCR稳定性增强（缓存 + 多模型投票） / Robustesse OCR (cache + vote multi-modèles)
-- Zone语义细分（process_unit / utility / storage / corridor） / Raffinement sémantique des zones
-- 关系边置信度评分 / Scoring de confiance des arêtes de relation
-- 更强工艺流推理（upstream/downstream） / Inférence de flux procédé renforcée
-
-### Phase C（基础版已实现 / Base implémentée）
-- P&ID 联动（PDF 参考文档标签提取 + 工艺边映射）/ Intégration P&ID (extraction tags PDF + mapping des arêtes procédé)
-- 拓扑约束优化（安全间距违规检测 + 负载分区诊断）/ Optimisation topologique (détection des violations d’espacement + diagnostic de surcharge des zones)
-- 多工厂版本管理（运行时快照注册与版本列表）/ Versioning multi-usines (enregistrement des snapshots runtime + liste des versions)
-- Observability（metrics/tracing/audit 基础链路）/ Observabilité (chaîne de base metrics/tracing/audit)
+- Better CAD / vector drawing ingestion
+- Smarter layout risk hints (rules + optional model)
+- Report export (PDF/HTML)
+- Bilingual UI (EN/CN parity in chrome)
+- Multi-project / workspace management in UI
 
 ---
 
-## 🤝 Contribution / Contribution / 贡献建议
+## What this project demonstrates (recruiter-friendly)
 
-🇨🇳 欢迎 PR（算法、识别稳定性、工业可视化）。  
-🇫🇷 Contributions bienvenues (algorithmes, robustesse OCR, visualisation industrielle).
+- **Full-stack engineering** — Flask API, async tasks, static SPA-style frontend, Three.js integration.
+- **Async backend systems** — Non-blocking upload, polling, bounded task store, structured lifecycle.
+- **AI integration** — Optional LM Studio chat with **data-aware** prompts; optional vision enrichment behind a flag.
+- **Computer vision / OCR workflow** — Layout → detection → fusion with tabular data.
+- **Product-oriented UX** — Unified upload, readable pipeline states, Copilot panel with offline-safe behavior.
 
 ---
 
-## 📜 License / Licence / 许可证
+## API snapshot (non-exhaustive)
 
-以仓库 LICENSE 为准。  
-Référez-vous au fichier LICENSE du dépôt.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/health` | Liveness |
+| `POST` | `/api/upload` | Multipart upload; returns `task_id` immediately |
+| `GET` | `/api/task/<id>` | Task status, progress, structured errors |
+| `GET` | `/api/pipeline` | Unified scene + relations + walls + graph + phase_c (+ optional `vision`) |
+| `GET` | `/api/equipment` | Equipment dict from Excel |
+| `POST` | `/api/copilot` | Local LLM chat (JSON body: `message`, optional `project_context`) |
 
+See `backend/api.py` for the full route list (`/api/layout_graph`, `/api/observability`, etc.).
+
+---
+
+## Contributing
+
+Issues and PRs are welcome—especially around OCR robustness, layout graph semantics, and UX clarity. Keep changes aligned with the project’s **local-first** and **stability-first** goals.
+
+---
+
+## License / author
+
+License file: add a `LICENSE` to the repository if you need a formal terms (e.g. MIT); until then, treat usage as **all rights reserved** by the repository owner unless stated otherwise in the GitHub **About** section.

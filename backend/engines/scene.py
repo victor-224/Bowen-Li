@@ -7,6 +7,7 @@ dependencies are governed by `backend/asset_contract.py`.
 from __future__ import annotations
 
 import logging
+import cv2
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -16,6 +17,8 @@ from backend.asset_contract import (
     AssetContractViolation,
     load_asset,
 )
+from backend.core.execution_policy import resolve_execution_policy
+from backend.core.input_contract import evaluate_input_contract
 from backend.engines.geometry import geometry_engine
 from backend.locator import detect_positions_with_confidence, pixel_to_mm
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -25,6 +28,39 @@ from backend.walls import parse_walls_and_rooms
 logger = logging.getLogger("industrial_digital_twin.scene")
 
 SCENE_STAGE = "scene_render"
+
+
+def safe_load_image(path: str) -> Optional[Any]:
+    """Safe image read used by degraded mode guard."""
+    img = cv2.imread(path)
+    if img is None:
+        return None
+    return img
+
+
+def _degraded_empty_layout(
+    equipment: Mapping[str, Mapping[str, Any]],
+    warning: str = "missing_demo_asset",
+    input_contract: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return a safe empty-layout scene that keeps downstream contracts stable."""
+    rows = equipment_dict_to_list(equipment)
+    items = build_equipment_list(rows, positions_mm={})
+    contract = input_contract or {}
+    scene: Dict[str, Any] = empty_scene(
+        {
+            "layout": "empty",
+            "warning": warning,
+            "input_state": contract.get("state", "degraded_layout"),
+            "input_contract": contract,
+            "execution_policy": contract.get("execution_policy"),
+        }
+    )
+    scene["equipment"] = items
+    scene["walls"] = []
+    scene["rooms"] = []
+    scene["center"] = [0.0, 0.0]
+    return geometry_engine(scene)
 
 
 def build_scene_document(
@@ -40,7 +76,53 @@ def build_scene_document(
     """
     # Contract-governed input. Any violation surfaces as AssetContractViolation
     # which the API layer translates into a structured ASSET_* error.
-    safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
+
+    try:
+        safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
+    except AssetContractViolation:
+        logger.warning(
+            "Layout image unavailable (demo or upload corrupted). Pipeline continues in degraded mode."
+        )
+        logger.warning(
+            "Demo plan.png missing or corrupted, switching to empty layout mode"
+        )
+        contract = evaluate_input_contract(
+            excel=equipment,
+            layout_image=None,
+            plan_path=None,
+        )
+        policy = resolve_execution_policy(contract)
+        return _degraded_empty_layout(
+            equipment,
+            warning="missing_demo_asset",
+            input_contract={**contract, "execution_policy": policy},
+        )
+    if safe_load_image(str(safe_plan)) is None:
+        logger.warning(
+            "Layout image unavailable (demo or upload corrupted). Pipeline continues in degraded mode."
+        )
+        logger.warning(
+            "Demo plan.png missing or corrupted, switching to empty layout mode"
+        )
+        contract = evaluate_input_contract(
+            excel=equipment,
+            layout_image=str(safe_plan),
+            plan_path=str(safe_plan),
+        )
+        policy = resolve_execution_policy(contract)
+        return _degraded_empty_layout(
+            equipment,
+            warning="missing_demo_asset",
+            input_contract={**contract, "execution_policy": policy},
+        )
+
+    # Evaluate contract with resolved plan path so state is explicit and accurate.
+    contract = evaluate_input_contract(
+        excel=equipment,
+        layout_image=str(safe_plan),
+        plan_path=str(safe_plan),
+    )
+    policy = resolve_execution_policy(contract)
 
     allowed_tags = set(str(t) for t in equipment.keys())
     detected = (
@@ -69,6 +151,10 @@ def build_scene_document(
     scene["walls"] = wall_info.get("walls", [])
     scene["rooms"] = wall_info.get("rooms", [])
     scene["center"] = wall_info.get("center", [0.0, 0.0])
+    scene.setdefault("meta", {})
+    scene["meta"]["input_state"] = contract.get("state", "valid")
+    scene["meta"]["input_contract"] = contract
+    scene["meta"]["execution_policy"] = policy
     return geometry_engine(scene)
 
 

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Industrial Digital Twin</title>
   <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
   <script type="importmap">
   {
     "imports": {
@@ -13,132 +14,142 @@
     }
   }
   </script>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 1rem 1.5rem; line-height: 1.4; }
-    h1 { font-size: 1.25rem; }
-    h2 { font-size: 1rem; margin-top: 1.25rem; }
-    #status { color: #555; font-size: 0.9rem; }
-    #upload-panel {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 0.75rem;
-      align-items: end;
-      max-width: 58rem;
-      margin: 0.75rem 0 1rem;
-      padding: 0.75rem;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      background: #fafafa;
-    }
-    #upload-panel label { display: block; font-size: 0.9rem; margin-bottom: 0.2rem; }
-    #upload-panel input, #upload-panel button {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 0.4rem;
-      font-size: 0.92rem;
-    }
-    #upload-feedback { font-size: 0.9rem; color: #2b6f2b; }
-    #loaded-filenames { font-size: 0.88rem; color: #444; margin-top: 0.4rem; }
-    #equipment-list { list-style: none; padding: 0; max-width: 48rem; }
-    #equipment-list li { border-bottom: 1px solid #ddd; padding: 0.5rem 0; }
-    #equipment-list .tag { font-weight: 600; margin-right: 0.5rem; }
-    #scene-layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 300px;
-      gap: 0.9rem;
-      align-items: start;
-    }
-    #three-container {
-      width: 100%;
-      height: min(70vh, 560px);
-      min-height: 320px;
-      margin-top: 1rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      background: #1a1a1a;
-      position: relative;
-      overflow: hidden;
-    }
-    #three-container canvas { display: block; width: 100%; height: 100%; }
-    #info-panel {
-      margin-top: 1rem;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      background: #fcfcfc;
-      padding: 0.75rem;
-      font-size: 0.9rem;
-    }
-    #info-panel h3 {
-      margin: 0 0 0.6rem;
-      font-size: 0.96rem;
-    }
-    #info-panel .kv { margin: 0.28rem 0; }
-    #info-panel .label { color: #666; display: inline-block; width: 4.5rem; }
-    #info-panel .value { font-weight: 500; }
-    .error { color: #a00; }
-    @media (max-width: 980px) {
-      #scene-layout {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
 </head>
 <body>
-  <h1>Industrial Digital Twin</h1>
-  <p id="status">Loading…</p>
-  <div id="upload-panel">
-    <div>
-      <label for="layout-file-input">选择图纸 PDF/PNG</label>
-      <input id="layout-file-input" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
-    </div>
-    <div>
-      <label for="excel-file-input">选择 Excel 文件</label>
-      <input id="excel-file-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
-    </div>
-    <div>
-      <label for="reference-file-input">可选参考文档（PDF）</label>
-      <input id="reference-file-input" type="file" accept=".pdf,application/pdf">
-    </div>
-    <div>
-      <label for="structure-file-input">可选结构图（PDF/PNG）</label>
-      <input id="structure-file-input" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
-    </div>
-    <div style="display:none;">
-      <label for="gad-file-input">开发用途：GAD PDF</label>
-      <input id="gad-file-input" type="file" accept=".pdf,application/pdf">
-    </div>
-    <div>
-      <label>&nbsp;</label>
-      <button id="load-project-btn" type="button">加载项目</button>
-    </div>
-  </div>
-  <h2>Processing Status</h2>
-  <p id="processing-status">Idle</p>
-  <button id="cancel-task-btn" type="button">取消当前任务</button>
-  <p id="upload-feedback"></p>
-  <p id="loaded-filenames">当前已加载：平面图（未选择），Excel（未选择）</p>
+  <header class="app-header">
+    <h1>Industrial Digital Twin</h1>
+    <p>Local plant layout, equipment graph, and 3D scene. Upload once—processing runs in the background.</p>
+  </header>
 
-  <h2>Equipment (from /api/equipment)</h2>
-  <ul id="equipment-list"></ul>
+  <p id="status" style="padding:0.4rem 1.5rem;margin:0;font-size:0.88rem;">Loading…</p>
 
-  <h2>Scene / Graph (from /api/pipeline + /api/layout_graph)</h2>
-  <p id="scene-meta"></p>
-  <div id="scene-layout">
-    <div id="three-container"></div>
-    <aside id="info-panel">
-      <h3>设备信息</h3>
-      <div class="kv"><span class="label">tag</span><span class="value" id="info-tag">-</span></div>
-      <div class="kv"><span class="label">service</span><span class="value" id="info-service">-</span></div>
-      <div class="kv"><span class="label">尺寸</span><span class="value" id="info-size">-</span></div>
-      <div class="kv"><span class="label">坐标</span><span class="value" id="info-pos">-</span></div>
-      <div class="kv"><span class="label">zone</span><span class="value" id="info-zone">-</span></div>
-      <div class="kv"><span class="label">upstream</span><span class="value" id="info-upstream">-</span></div>
-      <div class="kv"><span class="label">downstream</span><span class="value" id="info-downstream">-</span></div>
-      <div class="kv"><span class="label">nearest</span><span class="value" id="info-nearest">-</span></div>
+  <div class="app-grid">
+    <div class="app-main">
+      <div class="card" id="upload-section">
+        <h2>Upload project files</h2>
+        <p style="margin:0 0 0.5rem; font-size:0.9rem; color:var(--text-muted);">PDF / PNG / JPG / PPT / PPTX / XLSX — drop files here or click to browse.</p>
+        <input
+          type="file"
+          id="project-files-input"
+          accept=".pdf,.png,.jpg,.jpeg,.xlsx,.ppt,.pptx,application/pdf,image/png,image/jpeg,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          multiple
+        />
+        <div
+          class="dropzone"
+          id="file-dropzone"
+          role="button"
+          tabindex="0"
+          aria-label="Click or drop project files"
+        >
+          <strong>Upload project files</strong>
+          <p>Drag and drop, or click to add files. Files are auto-tagged; override below if needed.</p>
+        </div>
+        <ul id="file-chips" aria-live="polite"></ul>
+        <details class="advanced">
+          <summary>Manual file mapping (advanced)</summary>
+          <p style="margin:0.5rem 0 0; font-size:0.86rem;">Use the selector on each file to override automatic categories.</p>
+        </details>
+        <div class="upload-toolbar">
+          <button class="btn-primary" id="load-project-btn" type="button">Load &amp; process</button>
+          <button class="btn-secondary" id="cancel-task-btn" type="button" disabled>Cancel</button>
+        </div>
+        <p id="upload-feedback" aria-live="polite"></p>
+        <p id="loaded-filenames" style="font-size:0.82rem;">No files added yet. Include at least one layout (PDF/PNG) and an equipment list (.xlsx) for a full run.</p>
+      </div>
+
+      <div class="card" id="status-section">
+        <h2>Pipeline status</h2>
+        <p class="status-primary" id="process-status">Idle</p>
+        <div class="status-detail" id="status-detail">
+          <div><span class="status-k">Stage</span> <code id="status-stage">—</code></div>
+          <div><span class="status-k">Label</span> <span id="status-label">—</span></div>
+          <div><span class="status-k">Progress</span> <span id="status-pct">—</span></div>
+        </div>
+        <p class="status-error-line" id="status-error-line" hidden></p>
+        <p class="status-note" id="status-completed-line" hidden></p>
+        <div class="task-progress-wrap" id="task-progress-wrap">
+          <progress id="task-progress" max="100" value="0" aria-label="Task progress">0%</progress>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Equipment</h2>
+        <p style="font-size:0.85rem; color:var(--text-muted); margin:0 0 0.4rem;" id="equip-hint">From the processed Excel (Equipment_list).</p>
+        <ul id="equipment-list"></ul>
+      </div>
+
+      <div class="card" id="scene-block">
+        <h2>Scene &amp; graph</h2>
+        <p id="scene-meta" style="font-size:0.88rem; margin:0 0 0.6rem;"></p>
+        <div id="scene-layout">
+          <div id="three-container"></div>
+          <aside id="info-panel">
+            <h3>Selection</h3>
+            <div class="kv"><span class="label">tag</span><span class="value" id="info-tag">-</span></div>
+            <div class="kv"><span class="label">service</span><span class="value" id="info-service">-</span></div>
+            <div class="kv"><span class="label">size</span><span class="value" id="info-size">-</span></div>
+            <div class="kv"><span class="label">pos</span><span class="value" id="info-pos">-</span></div>
+            <div class="kv"><span class="label">zone</span><span class="value" id="info-zone">-</span></div>
+            <div class="kv"><span class="label">upstream</span><span class="value" id="info-upstream">-</span></div>
+            <div class="kv"><span class="label">downstream</span><span class="value" id="info-downstream">-</span></div>
+            <div class="kv"><span class="label">nearest</span><span class="value" id="info-nearest">-</span></div>
+          </aside>
+        </div>
+        <h3 id="log-heading" class="h3-inline" style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted); margin:0.8rem 0 0.35rem; letter-spacing:0.04em;">Logs</h3>
+        <pre id="log-panel"></pre>
+      </div>
+    </div>
+
+    <aside class="app-copilot" id="copilot-aside" aria-label="AI Copilot">
+      <div class="copilot-header">
+        <h2>AI Copilot</h2>
+        <p>Assisted answers from the local model (optional).</p>
+      </div>
+      <div class="card ai-settings-card" id="ai-settings-card">
+        <h3 class="ai-settings-title">AI settings</h3>
+        <label class="ai-label" for="ai-lm-url">LM Studio endpoint</label>
+        <input type="url" id="ai-lm-url" class="ai-url-input" placeholder="http://localhost:1234/v1/chat/completions" autocomplete="off" />
+        <p class="ai-hint">Full OpenAI-compatible chat URL (must include <code>/v1/chat/completions</code>). Saved on this machine under <code>data/runtime/ai_config.json</code>.</p>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-vision">Vision model</label>
+          <input type="text" id="ai-model-vision" class="ai-url-input" placeholder="qwen2.5-vl-7b-instruct" />
+        </div>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-copilot">Copilot model</label>
+          <input type="text" id="ai-model-copilot" class="ai-url-input" placeholder="qwen3-8b-instruct" />
+        </div>
+        <div class="ai-model-row">
+          <label class="ai-label" for="ai-model-reasoning">Reasoning model</label>
+          <input type="text" id="ai-model-reasoning" class="ai-url-input" placeholder="deepseek-r1-distill-qwen-8b" />
+        </div>
+        <div class="ai-toolbar">
+          <button type="button" class="btn-primary" id="ai-save-btn">Save configuration</button>
+          <button type="button" class="btn-secondary" id="ai-test-btn">Test connection</button>
+        </div>
+        <p class="ai-hint" id="ai-test-msg" aria-live="polite"></p>
+        <div class="ai-status-block" id="ai-status-block" aria-live="polite">
+          <div><span class="status-k">Endpoint</span> <span id="ai-status-endpoint">—</span></div>
+          <div><span class="status-k">Copilot model</span> <code id="ai-status-copilot-model">—</code></div>
+          <div><span class="status-k">Vision model</span> <code id="ai-status-vision-model">—</code></div>
+          <div><span class="status-k">Status</span> <strong id="ai-status-state">unknown</strong></div>
+        </div>
+      </div>
+      <textarea
+        id="copilot-input"
+        placeholder="Ask about your plant layout…"
+        rows="3"
+      ></textarea>
+      <div id="copilot-actions">
+        <button type="button" class="btn-ghost" data-copilot="layout">Explain layout</button>
+        <button type="button" class="btn-ghost" data-copilot="risks">Detect risks</button>
+        <button type="button" class="btn-ghost" data-copilot="optimize">Optimize placement</button>
+        <button type="button" class="btn-ghost" data-copilot="equipment">Summarize equipment</button>
+        <button type="button" class="btn-ghost" data-copilot="failed">Why upload failed?</button>
+      </div>
+      <button class="btn-primary" type="button" id="copilot-send" style="width:100%; margin-bottom:0.5rem;">Send</button>
+      <div id="copilot-output" aria-live="polite" aria-atomic="true">Ask a question or use a quick action. If the local model is not running, you will see a short notice here.</div>
     </aside>
   </div>
-  <h2>Logs</h2>
-  <pre id="log-panel" style="background:#111;color:#d4d4d4;padding:0.75rem;border-radius:6px;max-height:180px;overflow:auto;"></pre>
 
   <script type="module" src="app.js"></script>
 </body>

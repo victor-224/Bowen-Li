@@ -335,6 +335,13 @@ class RuntimeState:
         with self._lock:
             self._cache[signature] = dict(payload)
 
+    def clear_pipeline_cache(self) -> int:
+        """Remove all cached pipeline payloads (e.g. after asset repair). Returns entries cleared."""
+        with self._lock:
+            n = len(self._cache)
+            self._cache.clear()
+            return n
+
     def build_signature(self, paths: Mapping[str, Optional[Path]]) -> str:
         return _files_signature(paths)
 

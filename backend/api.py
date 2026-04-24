@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
+import json
+import logging
+import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -20,6 +27,15 @@ from backend.layout_graph import build_layout_graph
 from backend.multiplant_registry import list_plants, register_snapshot
 from backend.observability import audit_event, finish_trace, get_observability, observe_operation, start_trace
 from backend.pid_integration import build_pid_links
+from backend.ai_service import call_copilot_model
+from backend.config import (
+    AI_RUNTIME_CONFIG_FILE,
+    get_ai_model_defaults,
+    get_lm_studio_chat_url,
+    lm_studio_url_from_env,
+)
+from backend.models.vision.vision_schema import normalize_vision_output
+from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 
@@ -39,6 +55,16 @@ _RUNTIME_PLAN_REL = _RUNTIME_DIR_REL / "plan.png"
 _RUNTIME_EXCEL_REL = _RUNTIME_DIR_REL / "equipment.xlsx"
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024  # 80MB soft limit for demo stability
 PIPELINE_TIMEOUT_SECONDS = 120
+# Optional VLM enrichment (set ENABLE_VISION=true in environment to enable).
+ENABLE_VISION = False
+_VISION_INTEGRATION_LOG = logging.getLogger("industrial_digital_twin.vision.integration")
+_VISION_INTEGRATION_LOGGED = False
+_VISION_MODEL = "qwen2.5-vl-7b-instruct"
+_VISION_PROMPT = (
+    "Analyze industrial layout. Detect equipment, structures, labels and relations."
+)
+_VISION_TIMEOUT_S = 20
+
 _RUNTIME_STATE = RuntimeState()
 
 TASK_QUEUED = "queued"
@@ -252,6 +278,48 @@ def plan_image_path() -> Path:
     return _repo_root() / Path("data") / "plan_hd.png"
 
 
+def _vision_enabled() -> bool:
+    """Read ENABLE_VISION: env overrides module constant when set."""
+    raw = os.environ.get("ENABLE_VISION")
+    if raw is None or raw == "":
+        return ENABLE_VISION
+    return str(raw).strip().lower() in {"1", "true", "yes"}
+
+
+def _maybe_attach_vision(payload: Dict[str, Any]) -> None:
+    """After successful pipeline dict, optionally add payload['vision'] (fail-safe)."""
+    global _VISION_INTEGRATION_LOGGED
+    if not _vision_enabled():
+        if not _VISION_INTEGRATION_LOGGED:
+            _VISION_INTEGRATION_LOG.info("vision integration disabled (ENABLE_VISION is off or unset)")
+            _VISION_INTEGRATION_LOGGED = True
+        return
+    if not _VISION_INTEGRATION_LOGGED:
+        _VISION_INTEGRATION_LOG.info("vision integration enabled (ENABLE_VISION is on)")
+        _VISION_INTEGRATION_LOGGED = True
+    try:
+        raw = run_vision_model(
+            image_path=str(plan_image_path()),
+            prompt=_VISION_PROMPT,
+            model=_VISION_MODEL,
+            timeout=_VISION_TIMEOUT_S,
+        )
+        norm = normalize_vision_output(raw, _VISION_MODEL)
+        payload["vision"] = norm
+    except Exception as e:  # noqa: BLE001
+        _VISION_INTEGRATION_LOG.warning(
+            "vision enrichment failed, pipeline continued: %r", e
+        )
+        payload["vision"] = {
+            "objects": [],
+            "relations": [],
+            "metadata": {
+                "model": "disabled_or_failed",
+                "confidence": 0.0,
+            },
+        }
+
+
 def _normalize_tag(value: object) -> str:
     """Collapse whitespace so e.g. 'P202 A' matches pickpoint tag 'P202A'."""
     if value is None:
@@ -363,7 +431,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "version_id": plant_version.get("version_id"),
             },
         )
-        return {
+        payload: Dict[str, Any] = {
             "scene": scene_doc.get("equipment", []),
             "relations": relations,
             "walls": walls_doc,
@@ -374,6 +442,8 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "multiplant_version": plant_version,
             },
         }
+        _maybe_attach_vision(payload)
+        return payload
     except Exception:
         status = "error"
         raise
@@ -431,6 +501,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
             "multiplant_version": plant_version,
         },
     }
+    _maybe_attach_vision(payload)
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
@@ -441,6 +512,309 @@ CORS(
     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
     supports_credentials=True,
 )
+
+_COPILOT_LOG = logging.getLogger("industrial_digital_twin.copilot")
+_AI_CFG_LOG = logging.getLogger("industrial_digital_twin.ai_config")
+_COPILOT_SYSTEM = (
+    "You are a concise technical assistant for industrial plant layout, equipment lists, and P&ID-style "
+    "drawings. Answer in plain language. If you lack plant-specific data, say so and give general guidance."
+)
+_COPILOT_CONTEXT_BUDGET = 12000
+_COPILOT_MSG_BUDGET = 4000
+
+
+def _lm_studio_models_url(chat_url: str) -> str:
+    u = (chat_url or "").strip().rstrip("/")
+    if u.endswith("/v1/chat/completions"):
+        return u[: -len("/chat/completions")] + "/models"
+    if "/v1/" in u:
+        return u.split("/v1/", 1)[0] + "/v1/models"
+    return u + "/v1/models"
+
+
+def _fetch_lm_models_list(chat_url: str, timeout: int = 8) -> List[str]:
+    models_url = _lm_studio_models_url(chat_url)
+    try:
+        req = urlrequest.Request(models_url, method="GET", headers={"Accept": "application/json"})
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except (urlerror.URLError, urlerror.HTTPError, TimeoutError, socket.timeout, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    data = raw.get("data")
+    if not isinstance(data, list):
+        return []
+    out: List[str] = []
+    for item in data:
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            out.append(str(item["id"]))
+    return out
+
+
+def _load_ai_runtime_file() -> Dict[str, Any]:
+    p = AI_RUNTIME_CONFIG_FILE
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _save_ai_runtime_file(payload: Dict[str, Any]) -> None:
+    AI_RUNTIME_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AI_RUNTIME_CONFIG_FILE.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _ai_endpoint_display(chat_url: str) -> str:
+    try:
+        p = urlparse.urlparse(chat_url)
+        host = p.hostname or ""
+        port = p.port
+        if port:
+            return f"{host}:{port}"
+        return host or chat_url[:80]
+    except Exception:  # noqa: BLE001
+        return chat_url[:80]
+
+
+@app.get("/api/ai/config")
+def get_ai_config() -> Any:
+    """Return effective AI URL (from env + optional runtime override) and model defaults."""
+    rt = _load_ai_runtime_file()
+    url = get_lm_studio_chat_url()
+    models = get_ai_model_defaults()
+    return jsonify(
+        {
+            "success": True,
+            "lm_studio_url": url,
+            "lm_studio_url_env": lm_studio_url_from_env(),
+            "runtime_override": bool((rt.get("lm_studio_url") or "").strip()),
+            "models": models,
+            "endpoint_display": _ai_endpoint_display(url),
+        }
+    )
+
+
+@app.post("/api/ai/config")
+def post_ai_config() -> Any:
+    """Persist optional runtime override for LM Studio URL and per-role models."""
+    data = request.get_json(silent=True) or {}
+    url = (data.get("lm_studio_url") or "").strip()
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
+    current = _load_ai_runtime_file()
+    if url:
+        current["lm_studio_url"] = url
+    else:
+        current.pop("lm_studio_url", None)
+    for key in ("vision", "copilot", "reasoning"):
+        fk = f"model_{key}"
+        v = data.get(fk) if fk in data else data.get(key)
+        if isinstance(v, str):
+            if v.strip():
+                current[fk] = v.strip()
+            elif fk in data or key in data:
+                current.pop(fk, None)
+        elif v is None and (fk in data or key in data):
+            current.pop(fk, None)
+    _save_ai_runtime_file(current)
+    _AI_CFG_LOG.info("ai runtime config updated keys=%s", list(current.keys()))
+    return jsonify({"success": True, "lm_studio_url": get_lm_studio_chat_url(), "models": get_ai_model_defaults()})
+
+
+@app.post("/api/ai/test-connection")
+def post_ai_test_connection() -> Any:
+    """Probe LM Studio: optional ``lm_studio_url`` in JSON body; else use configured URL."""
+    data = request.get_json(silent=True) or {}
+    url = (data.get("lm_studio_url") or "").strip() or get_lm_studio_chat_url()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "error": "INVALID_URL",
+                    "models": [],
+                    "success": False,
+                    "fallback": True,
+                }
+            ),
+            200,
+        )
+    models = _fetch_lm_models_list(url, timeout=8)
+    if models:
+        return jsonify({"status": "connected", "models": models, "success": True})
+    probe = call_copilot_model(
+        [
+            {"role": "system", "content": "Reply with OK only."},
+            {"role": "user", "content": "ping"},
+        ],
+        temperature=0.0,
+        timeout=6,
+        max_tokens=4,
+        base_url=url,
+    )
+    if probe.get("success"):
+        return jsonify(
+            {
+                "status": "connected",
+                "models": [str(probe.get("model") or get_ai_model_defaults().get("copilot", ""))],
+                "success": True,
+            }
+        )
+    err = str(probe.get("error") or "AI_OFFLINE")
+    return jsonify(
+        {
+            "status": "offline",
+            "models": [],
+            "success": False,
+            "error": err if "OFFLINE" in err.upper() or "FAILED" in err.upper() else "AI_OFFLINE",
+            "fallback": True,
+        }
+    )
+
+
+@app.get("/api/ai/status")
+def get_ai_status() -> Any:
+    """Lightweight status for UI: endpoint display + copilot model + quick reachability."""
+    url = get_lm_studio_chat_url()
+    md = get_ai_model_defaults()
+    models = _fetch_lm_models_list(url, timeout=4)
+    connected = bool(models)
+    if not connected:
+        p = call_copilot_model(
+            [{"role": "user", "content": "ping"}],
+            temperature=0.0,
+            timeout=4,
+            max_tokens=2,
+        )
+        connected = bool(p.get("success"))
+    return jsonify(
+        {
+            "success": True,
+            "endpoint": _ai_endpoint_display(url),
+            "lm_studio_url": url,
+            "copilot_model": md.get("copilot", ""),
+            "vision_model": md.get("vision", ""),
+            "reasoning_model": md.get("reasoning", ""),
+            "status": "connected" if connected else "offline",
+        }
+    )
+
+
+@app.post("/api/agent/execute")
+def post_agent_execute() -> Any:
+    """Whitelisted tool orchestration (internal plan + execute). Does not replace async upload."""
+    from backend.agent.tool_orchestrator import execute_intent
+
+    body = request.get_json(silent=True) or {}
+    ctx = body.get("context") if isinstance(body.get("context"), dict) else body
+    if not isinstance(ctx, dict):
+        ctx = {}
+    return jsonify(execute_intent(ctx, runtime_state=_RUNTIME_STATE))
+
+
+def _serialize_copilot_context(obj: Any) -> str:
+    """Render optional client-provided project snapshot; trim to budget."""
+    if obj is None or obj == {} or obj == []:
+        return ""
+    try:
+        if isinstance(obj, str):
+            s = obj.strip()
+        else:
+            s = json.dumps(obj, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        s = str(obj)[:_COPILOT_CONTEXT_BUDGET]
+    if len(s) > _COPILOT_CONTEXT_BUDGET:
+        return s[: _COPILOT_CONTEXT_BUDGET - 3] + "..."
+    return s
+
+
+@app.post("/api/copilot")
+def post_copilot() -> Any:
+    """Local LLM chat for the UI; never 500 for LM Studio offline (fail-soft JSON).
+
+    Accepts ``project_context`` (dict/list/str) with equipment, graph, scene, vision, errors.
+    Merged into the user message so the model prefers project facts over generic advice.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        user_msg = (data.get("message") or "").strip()
+        if not user_msg:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "EMPTY_MESSAGE",
+                        "content": "",
+                    }
+                ),
+                200,
+            )
+    except Exception as e:  # noqa: BLE001
+        _COPILOT_LOG.warning("copilot bad request: %r", e)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "INVALID_JSON",
+                    "content": "",
+                }
+            ),
+            200,
+        )
+    try:
+        ctx_raw = data.get("project_context")
+        ctx_str = _serialize_copilot_context(ctx_raw)
+        if ctx_str:
+            user_content = (
+                "When answering, prefer concrete facts from PROJECT DATA (JSON) below. "
+                "If data is missing, say so briefly and use general industry guidance only where needed.\n\n"
+                "--- PROJECT DATA (JSON) ---\n"
+                f"{ctx_str}\n"
+                "--- END ---\n\n"
+                f"User question:\n{user_msg[:_COPILOT_MSG_BUDGET]}"
+            )
+        else:
+            user_content = user_msg[:8000]
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": _COPILOT_SYSTEM},
+            {"role": "user", "content": user_content},
+        ]
+        out = call_copilot_model(messages, temperature=0.3, timeout=45, max_tokens=1024)
+        if not out.get("success"):
+            code = out.get("error", "COPILOT_ERROR")
+            _COPILOT_LOG.warning("copilot LM: %s", code)
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": code,
+                        "content": "",
+                        "fallback": bool(out.get("fallback")),
+                    }
+                ),
+                200,
+            )
+        content = str(out.get("content") or "").strip()
+        return jsonify({"success": True, "content": content, "error": None})
+    except Exception as e:  # noqa: BLE001
+        _COPILOT_LOG.warning("copilot exception: %r", e)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "COPILOT_EXCEPTION",
+                    "content": "",
+                }
+            ),
+            200,
+        )
 
 
 @app.get("/api/equipment")
