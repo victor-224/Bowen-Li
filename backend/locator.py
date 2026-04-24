@@ -62,17 +62,30 @@ def _is_pdf(path: Path) -> bool:
     return path.suffix.lower() == ".pdf"
 
 
+def _gpu_available_for_ocr() -> bool:
+    # Operator override for forcing CPU mode even when CUDA is present.
+    if str(__import__("os").environ.get("FORCE_OCR_CPU", "")).strip().lower() in {"1", "true", "yes"}:
+        return False
+    try:
+        import torch  # optional dependency from easyocr stack
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _detect_with_easyocr(plan_path: Path) -> Dict[str, Dict[str, object]]:
     import easyocr  # optional dependency, imported lazily
 
     # Silence non-actionable CPU-only warnings in headless/cloud environments.
+    use_gpu = _gpu_available_for_ocr()
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
             message=".*pin_memory.*no accelerator is found.*",
             category=UserWarning,
         )
-        reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
         results = reader.readtext(str(plan_path))
     out: Dict[str, Dict[str, object]] = {}
     conf_map: Dict[str, float] = {}

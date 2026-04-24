@@ -151,6 +151,14 @@ def _filter_points_on_drawing(
     diagnostics["kept_count"] = len(out)
     diagnostics["dropped_count"] = diagnostics["raw_count"] - diagnostics["kept_count"]
     diagnostics["top_left_suppressed"] = bool(suppress_top_left)
+    # Fail-open: if filtering wipes all detected points, keep raw points.
+    # This avoids false-negative empty scenes due to over-strict ROI/corner rules.
+    if diagnostics["raw_count"] > 0 and diagnostics["kept_count"] == 0:
+        diagnostics["filter_fail_open"] = True
+        diagnostics["kept_count"] = diagnostics["raw_count"]
+        diagnostics["dropped_count"] = 0
+        return dict(all_points), diagnostics
+    diagnostics["filter_fail_open"] = False
     return out, diagnostics
 
 
