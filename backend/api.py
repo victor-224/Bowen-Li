@@ -22,6 +22,7 @@ from backend.layout_graph import build_layout_graph
 from backend.multiplant_registry import list_plants, register_snapshot
 from backend.observability import audit_event, finish_trace, get_observability, observe_operation, start_trace
 from backend.pid_integration import build_pid_links
+from backend.llm.lmstudio_client import call_lmstudio_model
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
@@ -500,6 +501,79 @@ CORS(
     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
     supports_credentials=True,
 )
+
+_COPILOT_LOG = logging.getLogger("industrial_digital_twin.copilot")
+_COPILOT_SYSTEM = (
+    "You are a concise technical assistant for industrial plant layout, equipment lists, and P&ID-style "
+    "drawings. Answer in plain language. If you lack plant-specific data, say so and give general guidance."
+)
+_COPILOT_MODEL = "qwen3-8b-instruct"
+
+
+@app.post("/api/copilot")
+def post_copilot() -> Any:
+    """Local LLM chat for the UI; never 500 for LM Studio offline (fail-soft JSON)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        user_msg = (data.get("message") or "").strip()
+        if not user_msg:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "EMPTY_MESSAGE",
+                        "content": "",
+                    }
+                ),
+                200,
+            )
+    except Exception as e:  # noqa: BLE001
+        _COPILOT_LOG.warning("copilot bad request: %r", e)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "INVALID_JSON",
+                    "content": "",
+                }
+            ),
+            200,
+        )
+    try:
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": _COPILOT_SYSTEM},
+            {"role": "user", "content": user_msg[:8000]},
+        ]
+        out = call_lmstudio_model(
+            _COPILOT_MODEL, messages, temperature=0.3, timeout=45, max_tokens=1024
+        )
+        if not out.get("success"):
+            code = out.get("error", "COPILOT_ERROR")
+            _COPILOT_LOG.warning("copilot LM: %s", code)
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": code,
+                        "content": "",
+                    }
+                ),
+                200,
+            )
+        content = str(out.get("content") or "").strip()
+        return jsonify({"success": True, "content": content, "error": None})
+    except Exception as e:  # noqa: BLE001
+        _COPILOT_LOG.warning("copilot exception: %r", e)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "COPILOT_EXCEPTION",
+                    "content": "",
+                }
+            ),
+            200,
+        )
 
 
 @app.get("/api/equipment")
