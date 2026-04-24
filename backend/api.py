@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -20,6 +22,8 @@ from backend.layout_graph import build_layout_graph
 from backend.multiplant_registry import list_plants, register_snapshot
 from backend.observability import audit_event, finish_trace, get_observability, observe_operation, start_trace
 from backend.pid_integration import build_pid_links
+from backend.models.vision.vision_schema import normalize_vision_output
+from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 
@@ -39,6 +43,16 @@ _RUNTIME_PLAN_REL = _RUNTIME_DIR_REL / "plan.png"
 _RUNTIME_EXCEL_REL = _RUNTIME_DIR_REL / "equipment.xlsx"
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024  # 80MB soft limit for demo stability
 PIPELINE_TIMEOUT_SECONDS = 120
+# Optional VLM enrichment (set ENABLE_VISION=true in environment to enable).
+ENABLE_VISION = False
+_VISION_INTEGRATION_LOG = logging.getLogger("industrial_digital_twin.vision.integration")
+_VISION_INTEGRATION_LOGGED = False
+_VISION_MODEL = "qwen2.5-vl-7b-instruct"
+_VISION_PROMPT = (
+    "Analyze industrial layout. Detect equipment, structures, labels and relations."
+)
+_VISION_TIMEOUT_S = 20
+
 _RUNTIME_STATE = RuntimeState()
 
 TASK_QUEUED = "queued"
@@ -252,6 +266,48 @@ def plan_image_path() -> Path:
     return _repo_root() / Path("data") / "plan_hd.png"
 
 
+def _vision_enabled() -> bool:
+    """Read ENABLE_VISION: env overrides module constant when set."""
+    raw = os.environ.get("ENABLE_VISION")
+    if raw is None or raw == "":
+        return ENABLE_VISION
+    return str(raw).strip().lower() in {"1", "true", "yes"}
+
+
+def _maybe_attach_vision(payload: Dict[str, Any]) -> None:
+    """After successful pipeline dict, optionally add payload['vision'] (fail-safe)."""
+    global _VISION_INTEGRATION_LOGGED
+    if not _vision_enabled():
+        if not _VISION_INTEGRATION_LOGGED:
+            _VISION_INTEGRATION_LOG.info("vision integration disabled (ENABLE_VISION is off or unset)")
+            _VISION_INTEGRATION_LOGGED = True
+        return
+    if not _VISION_INTEGRATION_LOGGED:
+        _VISION_INTEGRATION_LOG.info("vision integration enabled (ENABLE_VISION is on)")
+        _VISION_INTEGRATION_LOGGED = True
+    try:
+        raw = run_vision_model(
+            image_path=str(plan_image_path()),
+            prompt=_VISION_PROMPT,
+            model=_VISION_MODEL,
+            timeout=_VISION_TIMEOUT_S,
+        )
+        norm = normalize_vision_output(raw, _VISION_MODEL)
+        payload["vision"] = norm
+    except Exception as e:  # noqa: BLE001
+        _VISION_INTEGRATION_LOG.warning(
+            "vision enrichment failed, pipeline continued: %r", e
+        )
+        payload["vision"] = {
+            "objects": [],
+            "relations": [],
+            "metadata": {
+                "model": "disabled_or_failed",
+                "confidence": 0.0,
+            },
+        }
+
+
 def _normalize_tag(value: object) -> str:
     """Collapse whitespace so e.g. 'P202 A' matches pickpoint tag 'P202A'."""
     if value is None:
@@ -363,7 +419,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "version_id": plant_version.get("version_id"),
             },
         )
-        return {
+        payload: Dict[str, Any] = {
             "scene": scene_doc.get("equipment", []),
             "relations": relations,
             "walls": walls_doc,
@@ -374,6 +430,8 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "multiplant_version": plant_version,
             },
         }
+        _maybe_attach_vision(payload)
+        return payload
     except Exception:
         status = "error"
         raise
@@ -431,6 +489,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
             "multiplant_version": plant_version,
         },
     }
+    _maybe_attach_vision(payload)
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
