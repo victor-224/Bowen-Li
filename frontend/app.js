@@ -3,6 +3,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const API_BASE = "http://localhost:5000";
 const MM = 0.001;
+// Spread model positions for better readability (visual only).
+const POSITION_VISUAL_SCALE = 1.8;
 
 const statusEl = document.getElementById("status");
 const listEl = document.getElementById("equipment-list");
@@ -791,13 +793,17 @@ function buildMesh(geometryType, row) {
 
 function positionMeters(row) {
   if (row && Number.isFinite(Number(row.x)) && Number.isFinite(Number(row.y))) {
-    return new THREE.Vector3(num(row.x, 0), 0, num(row.y, 0));
+    return new THREE.Vector3(num(row.x, 0) * POSITION_VISUAL_SCALE, 0, num(row.y, 0) * POSITION_VISUAL_SCALE);
   }
   const pm = row ? row.position_mm : null;
   if (Array.isArray(pm) && pm.length >= 2) {
-    return new THREE.Vector3(num(pm[0], 0) * MM, 0, num(pm[1], 0) * MM);
+    return new THREE.Vector3(num(pm[0], 0) * MM * POSITION_VISUAL_SCALE, 0, num(pm[1], 0) * MM * POSITION_VISUAL_SCALE);
   }
-  return new THREE.Vector3(num(pm?.x, 0) * MM, num(pm?.y, 0) * MM, num(pm?.z, 0) * MM);
+  return new THREE.Vector3(
+    num(pm?.x, 0) * MM * POSITION_VISUAL_SCALE,
+    num(pm?.y, 0) * MM * POSITION_VISUAL_SCALE,
+    num(pm?.z, 0) * MM * POSITION_VISUAL_SCALE
+  );
 }
 
 function createTagSprite(text) {

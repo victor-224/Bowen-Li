@@ -58,7 +58,9 @@ def build_scene_document(
     world_points = pixel_to_world(pixel_points, image_shape, plan_width_mm=17500.0)
 
     rows = equipment_dict_to_list(equipment)
-    items = build_equipment_list(rows, world_points)
+    # Only render 3D equipment that exists on the plan (has detected pixel/world point).
+    rows_on_plan = [row for row in rows if str(row.get("tag", "")) in world_points]
+    items = build_equipment_list(rows_on_plan, world_points)
     wall_info = parse_walls_and_rooms(safe_plan) if safe_plan is not None else {"walls": [], "rooms": [], "center": [0.0, 0.0]}
 
     scene: Dict[str, Any] = empty_scene({"spatial_system": "two_layer_pixel_to_world"})
