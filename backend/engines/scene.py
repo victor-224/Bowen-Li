@@ -22,6 +22,8 @@ from backend.core.input_contract import evaluate_input_contract
 from backend.core.policy_engine import resolve_policy
 from backend.core.spatial_contract import SpatialMode, make_spatial_contract
 from backend.core.spatial_truth_ledger import log_spatial_event, validate_contract_usage
+from backend.core.spatial_source_normalizer import normalize_spatial_sources
+from backend.core.spatial_canonical_model import build_canonical_space
 from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -226,15 +228,56 @@ def build_scene_document(
         )
     pixel_positions: Dict[str, tuple[int, int]] = {}
     conf_map: Dict[str, float] = {}
+    raw_points: list[dict[str, object]] = []
     for tag, v in detected.items():
         if isinstance(v, dict):
             p = v.get("pos", [0, 0])
             pixel_positions[tag] = (int(p[0]), int(p[1]))
-            conf_map[tag] = float(v.get("confidence", 0.0))
+            c = float(v.get("confidence", 0.0))
+            conf_map[tag] = c
+            raw_points.append(
+                {
+                    "tag": tag,
+                    "pos": [int(p[0]), int(p[1])],
+                    "confidence": c,
+                    "source": str(v.get("source") or "unknown"),
+                }
+            )
         else:
             pixel_positions[tag] = (int(v[0]), int(v[1]))
             conf_map[tag] = 0.7
-    positions = pixel_to_mm(pixel_positions, safe_plan)
+            raw_points.append(
+                {
+                    "tag": tag,
+                    "pos": [int(v[0]), int(v[1])],
+                    "confidence": 0.7,
+                    "source": "unknown",
+                }
+            )
+
+    normalized = normalize_spatial_sources(raw_points)
+    norm_by_tag = {str(r["tag"]): r for r in normalized}
+
+    with opencv_imread_quiet():
+        _img_dims = cv2.imread(str(safe_plan), cv2.IMREAD_COLOR)
+    plan_width_mm = 17500.0
+    if _img_dims is None:
+        canonical: list[dict[str, Any]] = []
+    else:
+        _h, _w = _img_dims.shape[:2]
+        canonical = build_canonical_space(normalized, (_w, _h), plan_width_mm=plan_width_mm)
+
+    positions_full = pixel_to_mm(pixel_positions, safe_plan)
+    positions: Dict[str, tuple[float, float]] = {}
+    for tag in allowed_tags:
+        rec = norm_by_tag.get(tag)
+        if rec is not None and not bool(rec.get("is_valid_spatial")):
+            positions[tag] = (0.0, 0.0)
+            conf_map[tag] = float(rec.get("confidence", conf_map.get(tag, 0.0)))
+        else:
+            positions[tag] = positions_full.get(tag, (0.0, 0.0))
+            if rec is not None:
+                conf_map[tag] = float(rec.get("confidence", conf_map.get(tag, 0.0)))
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions)
     wall_info = parse_walls_and_rooms(safe_plan)
@@ -252,6 +295,8 @@ def build_scene_document(
     scene["meta"]["policy"] = policy_engine
     scene["meta"]["policy_engine"] = policy_engine
     scene["meta"]["spatial_contract"] = spatial_contract
+    scene["meta"]["spatial_normalized"] = normalized
+    scene["meta"]["spatial_canonical"] = canonical
     usage_check = validate_contract_usage(
         contract=spatial_contract,
         scene_input_source=_extract_spatial_source(detected),
