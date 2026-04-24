@@ -34,6 +34,7 @@ from backend.config import (
     get_lm_studio_chat_url,
     lm_studio_url_from_env,
 )
+from backend.core.policy_engine import resolve_policy
 from backend.core.spatial_truth_ledger import summarize_truth_status
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
@@ -438,6 +439,14 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "walls": walls_doc,
             "layout_graph": layout_graph,
             "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+            "policy": resolve_policy(
+                contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
+                ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
+                runtime_context={
+                    "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
+                    "input_state": scene_doc.get("meta", {}).get("input_state"),
+                },
+            ),
             "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
             "phase_c": {
                 "pid_links": pid_links,
@@ -499,6 +508,14 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         "walls": walls_doc,
         "layout_graph": layout_graph,
         "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+        "policy": resolve_policy(
+            contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
+            ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
+            runtime_context={
+                "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
+                "input_state": scene_doc.get("meta", {}).get("input_state"),
+            },
+        ),
         "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
         "phase_c": {
             "pid_links": pid_links,

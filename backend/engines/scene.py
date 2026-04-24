@@ -19,6 +19,7 @@ from backend.asset_contract import (
 )
 from backend.core.execution_policy import resolve_execution_policy
 from backend.core.input_contract import evaluate_input_contract
+from backend.core.policy_engine import resolve_policy
 from backend.core.spatial_contract import SpatialMode, make_spatial_contract
 from backend.core.spatial_truth_ledger import log_spatial_event, validate_contract_usage
 from backend.engines.geometry import geometry_engine
@@ -50,6 +51,11 @@ def _degraded_empty_layout(
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions_mm={})
     contract = input_contract or {}
+    policy = resolve_policy(
+        contract=spatial_contract if isinstance(spatial_contract, dict) else {},
+        ai_status={"available": True},
+        runtime_context={"stage": SCENE_STAGE, "input_state": contract.get("state", "degraded_layout")},
+    )
     scene: Dict[str, Any] = empty_scene(
         {
             "layout": "empty",
@@ -57,6 +63,8 @@ def _degraded_empty_layout(
             "input_state": contract.get("state", "degraded_layout"),
             "input_contract": contract,
             "execution_policy": contract.get("execution_policy"),
+            "policy": policy,
+            "policy_engine": policy,
             "spatial_contract": spatial_contract
             if isinstance(spatial_contract, dict)
             else make_spatial_contract(
@@ -186,6 +194,15 @@ def build_scene_document(
 
     # CRITICAL GATE: synthetic / degraded modes must not feed scene geometry.
     source = _extract_spatial_source(detected)
+    policy_engine = resolve_policy(
+        contract=spatial_contract,
+        ai_status={"available": True},
+        runtime_context={
+            "stage": SCENE_STAGE,
+            "input_state": contract.get("state", "valid"),
+            "source": source,
+        },
+    )
     usage_check = validate_contract_usage(contract=spatial_contract, scene_input_source=source)
     log_spatial_event(
         {
@@ -230,6 +247,8 @@ def build_scene_document(
     scene["meta"]["input_state"] = contract.get("state", "valid")
     scene["meta"]["input_contract"] = contract
     scene["meta"]["execution_policy"] = policy
+    scene["meta"]["policy"] = policy_engine
+    scene["meta"]["policy_engine"] = policy_engine
     scene["meta"]["spatial_contract"] = spatial_contract
     usage_check = validate_contract_usage(
         contract=spatial_contract,
