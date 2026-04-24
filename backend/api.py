@@ -484,6 +484,9 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
                 "version_id": plant_version.get("version_id"),
             },
         )
+        meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
+        authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
+        preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
         payload: Dict[str, Any] = {
             "scene": scene_doc.get("equipment", []),
             "relations": relations,
@@ -491,6 +494,12 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "layout_graph": layout_graph,
             "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
             "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+            "spatial_decision_summary": {
+                "preflight_valid": bool(preflight.get("valid")),
+                "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
+                "authority_reason": str(authority.get("reason") or ""),
+                "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
+            },
             "policy": resolve_policy(
                 contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
                 ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
@@ -554,6 +563,9 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         source_files=source_files,
     )
     _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
+    meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
+    authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
+    preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
     payload = {
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
@@ -561,6 +573,12 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         "layout_graph": layout_graph,
         "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
         "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+        "spatial_decision_summary": {
+            "preflight_valid": bool(preflight.get("valid")),
+            "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
+            "authority_reason": str(authority.get("reason") or ""),
+            "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
+        },
         "policy": resolve_policy(
             contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
             ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
