@@ -4,7 +4,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const API_BASE = "http://localhost:5000";
 const MM = 0.001;
 // Spread model positions for better readability (visual only).
-const POSITION_VISUAL_SCALE = 1.8;
+const POSITION_VISUAL_SCALE = 2.8;
+const MIN_SAFE_GAP_M = 3.0;
 
 const statusEl = document.getElementById("status");
 const listEl = document.getElementById("equipment-list");
@@ -939,10 +940,34 @@ function populateEquipmentMeshes(threeCtx, items) {
     labelGroup.remove(o);
     disposeObject3D(o);
   }
+  const placed = [];
+  function applySafeSpacing(baseVec, minGapM = MIN_SAFE_GAP_M) {
+    const p = baseVec.clone();
+    const maxIter = 80;
+    for (let i = 0; i < maxIter; i += 1) {
+      let moved = false;
+      for (const q of placed) {
+        const dx = p.x - q.x;
+        const dz = p.z - q.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < minGapM) {
+          const nx = dist > 1e-6 ? dx / dist : (Math.random() - 0.5);
+          const nz = dist > 1e-6 ? dz / dist : (Math.random() - 0.5);
+          const push = (minGapM - dist) * 0.55;
+          p.x += nx * push;
+          p.z += nz * push;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    placed.push(p.clone());
+    return p;
+  }
   for (const row of items) {
     const gt = row.geometry_type || "cylinder";
     const mesh = buildMesh(gt, row);
-    const base = positionMeters(row);
+    const base = applySafeSpacing(positionMeters(row), MIN_SAFE_GAP_M);
     mesh.position.set(base.x, 0, base.z);
     mesh.userData.tag = row.tag;
     mesh.userData.row = row;

@@ -35,6 +35,73 @@ def _plan_shape(plan: Path) -> tuple[int, int]:
     return int(w), int(h)
 
 
+def _estimate_drawing_roi(plan: Path) -> Optional[tuple[float, float, float, float]]:
+    """
+    Estimate the actual drawing area (exclude white margins/legend blocks).
+    Returns normalized bbox (x0, y0, x1, y1) in [0,1], or None if unknown.
+    """
+    with opencv_imread_quiet():
+        img = cv2.imread(str(plan), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    if w <= 0 or h <= 0:
+        return None
+    # Foreground = non-white drawing content.
+    _, fg = cv2.threshold(img, 245, 255, cv2.THRESH_BINARY_INV)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, kernel, iterations=2)
+    points = cv2.findNonZero(fg)
+    if points is None:
+        return None
+    x, y, bw, bh = cv2.boundingRect(points)
+    if bw <= 0 or bh <= 0:
+        return None
+    area_ratio = (bw * bh) / float(w * h)
+    if area_ratio < 0.05:
+        return None
+    # Slightly shrink ROI to avoid border text/noise.
+    pad_x = max(2, int(0.01 * bw))
+    pad_y = max(2, int(0.01 * bh))
+    x0 = max(0, x + pad_x) / float(w)
+    y0 = max(0, y + pad_y) / float(h)
+    x1 = min(w, x + bw - pad_x) / float(w)
+    y1 = min(h, y + bh - pad_y) / float(h)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (x0, y0, x1, y1)
+
+
+def _filter_points_on_drawing(
+    pixel_points: Mapping[str, tuple[float, float]],
+    plan: Optional[Path],
+    image_shape: tuple[int, int],
+) -> Dict[str, tuple[float, float]]:
+    """
+    Keep only points likely inside real drawing area, dropping misleading legend tags
+    (especially top-left label blocks unrelated to equipment placement).
+    """
+    out: Dict[str, tuple[float, float]] = {}
+    w, h = image_shape
+    if w <= 0 or h <= 0:
+        return dict(pixel_points)
+
+    roi = _estimate_drawing_roi(plan) if plan is not None else None
+    for tag, (x, y) in dict(pixel_points).items():
+        xn = float(x) / float(w)
+        yn = float(y) / float(h)
+        keep = True
+        if roi is not None:
+            x0, y0, x1, y1 = roi
+            keep = (x0 <= xn <= x1) and (y0 <= yn <= y1)
+        # Hard guard for common misleading corner labels.
+        if xn < 0.2 and yn < 0.2:
+            keep = False
+        if keep:
+            out[str(tag)] = (float(x), float(y))
+    return out
+
+
 def build_scene_document(
     equipment: Mapping[str, Mapping[str, Any]],
     plan_path: Optional[Path] = None,
@@ -55,6 +122,7 @@ def build_scene_document(
         raw_detected = dict(detected_positions)
 
     pixel_points = load_points(raw_detected)
+    pixel_points = _filter_points_on_drawing(pixel_points, safe_plan, image_shape)
     world_points = pixel_to_world(pixel_points, image_shape, plan_width_mm=17500.0)
 
     rows = equipment_dict_to_list(equipment)
