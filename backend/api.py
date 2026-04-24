@@ -707,6 +707,18 @@ def get_ai_status() -> Any:
     )
 
 
+@app.post("/api/agent/execute")
+def post_agent_execute() -> Any:
+    """Whitelisted tool orchestration (internal plan + execute). Does not replace async upload."""
+    from backend.agent.tool_orchestrator import execute_intent
+
+    body = request.get_json(silent=True) or {}
+    ctx = body.get("context") if isinstance(body.get("context"), dict) else body
+    if not isinstance(ctx, dict):
+        ctx = {}
+    return jsonify(execute_intent(ctx, runtime_state=_RUNTIME_STATE))
+
+
 def _serialize_copilot_context(obj: Any) -> str:
     """Render optional client-provided project snapshot; trim to budget."""
     if obj is None or obj == {} or obj == []:
