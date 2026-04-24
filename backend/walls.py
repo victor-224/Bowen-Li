@@ -9,11 +9,13 @@ import cv2
 import numpy as np
 
 from backend.opencv_util import opencv_imread_quiet
+from backend.core.spatial_frame import pixel_to_layout_mm
 
 
-def _pixel_to_mm(x: float, y: float, img_h: int, scale: float) -> List[float]:
-    """Convert image pixel (origin top-left) to plan mm (origin bottom-left)."""
-    return [round(float(x) * scale, 3), round(float(img_h - y) * scale, 3)]
+def _pixel_to_mm(x: float, y: float, w: int, h: int, plan_width_mm: float) -> List[float]:
+    """Convert image pixel to plan layout mm (same contract as ``locator.pixel_to_mm``)."""
+    x_mm, y_mm = pixel_to_layout_mm(x, y, w, h, plan_width_mm)
+    return [round(float(x_mm), 3), round(float(y_mm), 3)]
 
 
 def parse_walls_and_rooms(
@@ -58,8 +60,8 @@ def parse_walls_and_rooms(
     if lines is not None:
         for l in lines[:800]:
             x1, y1, x2, y2 = l[0]
-            p1 = _pixel_to_mm(x1, y1, h, scale)
-            p2 = _pixel_to_mm(x2, y2, h, scale)
+            p1 = _pixel_to_mm(x1, y1, w, h, plan_width_mm)
+            p2 = _pixel_to_mm(x2, y2, w, h, plan_width_mm)
             walls.append(
                 {
                     "type": "wall_line",
@@ -71,7 +73,7 @@ def parse_walls_and_rooms(
     if outer_contour is not None:
         peri = cv2.arcLength(outer_contour, True)
         approx = cv2.approxPolyDP(outer_contour, 0.005 * peri, True)
-        poly = [_pixel_to_mm(pt[0][0], pt[0][1], h, scale) for pt in approx]
+        poly = [_pixel_to_mm(pt[0][0], pt[0][1], w, h, plan_width_mm) for pt in approx]
         walls.append({"type": "outer_boundary", "polygon_mm": poly})
 
     rooms: List[Dict[str, Any]] = []
@@ -82,18 +84,21 @@ def parse_walls_and_rooms(
             continue
         x, y, rw, rh = cv2.boundingRect(c)
         center_px = (x + rw / 2.0, y + rh / 2.0)
+        x_mm_tl, _ = pixel_to_layout_mm(x, y, w, h, plan_width_mm)
+        _, y_mm_bl = pixel_to_layout_mm(x, y + rh, w, h, plan_width_mm)
         rooms.append(
             {
                 "bbox_mm": {
-                    "x": round(x * scale, 3),
-                    "y": round((h - (y + rh)) * scale, 3),
+                    "x": round(x_mm_tl, 3),
+                    "y": round(y_mm_bl, 3),
                     "width": round(rw * scale, 3),
                     "height": round(rh * scale, 3),
                 },
-                "center_mm": _pixel_to_mm(center_px[0], center_px[1], h, scale),
+                "center_mm": _pixel_to_mm(center_px[0], center_px[1], w, h, plan_width_mm),
             }
         )
 
-    center = [round((w * scale) / 2.0, 3), round((h * scale) / 2.0, 3)]
+    cx_mm, cy_mm = pixel_to_layout_mm(w / 2.0, h / 2.0, w, h, plan_width_mm)
+    center = [round(cx_mm, 3), round(cy_mm, 3)]
     return {"walls": walls, "rooms": rooms, "center": center}
 

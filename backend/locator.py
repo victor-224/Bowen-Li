@@ -17,6 +17,7 @@ from backend.core.spatial_contract import (
 from backend.core.spatial_truth_ledger import log_spatial_event
 from backend.pickpoint import pick_points_on_plan
 from backend.opencv_util import opencv_imread_quiet
+from backend.core.spatial_frame import pixel_to_layout_mm
 
 _TAG_PATTERN = re.compile(r"[A-Z]\s*\d{2,4}\s*[A-Z]?", re.IGNORECASE)
 logger = logging.getLogger("industrial_digital_twin.spatial_debug")
@@ -434,10 +435,7 @@ def pixel_to_mm(
     if w <= 0:
         raise ValueError(f"Invalid plan width: {w}")
 
-    scale = float(plan_width_mm) / float(w)
     out: Dict[str, Tuple[float, float]] = {}
     for tag, (x, y) in positions_px.items():
-        x_mm = float(x) * scale
-        y_mm = float(h - y) * scale
-        out[tag] = (x_mm, y_mm)
+        out[tag] = pixel_to_layout_mm(float(x), float(y), w, h, plan_width_mm)
     return out
