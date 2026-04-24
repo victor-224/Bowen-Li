@@ -229,79 +229,18 @@ def build_scene_document(
             input_contract={**contract, "execution_policy": policy},
             spatial_contract=spatial_contract,
         )
-    pixel_positions: Dict[str, tuple[int, int]] = {}
-    raw_points: list[dict[str, object]] = []
-    for tag, v in detected.items():
-        if isinstance(v, dict):
-            p = v.get("pos", [0, 0])
-            pixel_positions[tag] = (int(p[0]), int(p[1]))
-            c = float(v.get("confidence", 0.0))
-            raw_points.append(
-                {
-                    "tag": tag,
-                    "pos": [int(p[0]), int(p[1])],
-                    "confidence": c,
-                    "source": str(v.get("source") or "unknown"),
-                }
-            )
-        else:
-            pixel_positions[tag] = (int(v[0]), int(v[1]))
-            raw_points.append(
-                {
-                    "tag": tag,
-                    "pos": [int(v[0]), int(v[1])],
-                    "confidence": 0.7,
-                    "source": "unknown",
-                }
-            )
-
     conf_map: Dict[str, float] = {}
-
-    plan_width_mm = 17500.0
     unified = unify_spatial_input(
-        raw_points,
-        pixel_positions,
-        plan_path=safe_plan,
-        plan_width_mm=plan_width_mm,
+        detected=detected,
+        allowed_tags=allowed_tags,
+        safe_plan=safe_plan,
+        spatial_contract=spatial_contract,
+        plan_width_mm=17500.0,
     )
     normalized = list(unified.get("normalized", []))
     canonical = list(unified.get("canonical", []))
-    positions_full = dict(unified.get("layout_points", {}))
-    image_shape = unified.get("image_shape")
-    cluster_mm: Dict[str, tuple[float, float]] = {}
-    for tag, v in detected.items():
-        if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
-            if tag in positions_full:
-                cluster_mm[tag] = positions_full[tag]
-
-    preflight = validate_spatial_consistency(
-        canonical,
-        positions_full,
-        normalized_points=normalized,
-        image_shape=image_shape,
-        plan_width_mm=plan_width_mm,
-    )
-
-    contract_for_authority = dict(spatial_contract)
-    if not bool(preflight.get("valid")):
-        contract_for_authority = {
-            **contract_for_authority,
-            "spatial_valid": False,
-            "scene_allowed": False,
-            "spatial_mode": SpatialMode.DEGRADED,
-            "reason": "preflight spatial collapse detected",
-        }
-
-    authority = resolve_spatial_authority(
-        canonical_points=canonical,
-        layout_mm_points=positions_full,
-        cluster_points=cluster_mm,
-        contract=contract_for_authority,
-        allowed_tags=allowed_tags,
-        image_shape=image_shape,
-        plan_width_mm=plan_width_mm,
-        normalized_points=normalized,
-    )
+    preflight = dict(unified.get("preflight", {}))
+    authority = dict(unified.get("authority", {}))
 
     if authority.get("mode") != "FINAL":
         spatial_contract_out = dict(spatial_contract)
