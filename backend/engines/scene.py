@@ -76,30 +76,64 @@ def _filter_points_on_drawing(
     pixel_points: Mapping[str, tuple[float, float]],
     plan: Optional[Path],
     image_shape: tuple[int, int],
-) -> Dict[str, tuple[float, float]]:
+) -> tuple[Dict[str, tuple[float, float]], Dict[str, Any]]:
     """
     Keep only points likely inside real drawing area, dropping misleading legend tags
     (especially top-left label blocks unrelated to equipment placement).
     """
     out: Dict[str, tuple[float, float]] = {}
+    diagnostics: Dict[str, Any] = {
+        "roi": None,
+        "raw_count": len(dict(pixel_points)),
+        "kept_count": 0,
+        "dropped_count": 0,
+        "dropped_top_left_count": 0,
+        "dropped_outside_roi_count": 0,
+        "top_left_count_before": 0,
+    }
     w, h = image_shape
     if w <= 0 or h <= 0:
-        return dict(pixel_points)
+        diagnostics["kept_count"] = len(dict(pixel_points))
+        return dict(pixel_points), diagnostics
 
     roi = _estimate_drawing_roi(plan) if plan is not None else None
-    for tag, (x, y) in dict(pixel_points).items():
+    diagnostics["roi"] = roi
+    all_points = dict(pixel_points)
+    top_left_candidates = set()
+    for tag, (x, y) in all_points.items():
+        xn = float(x) / float(w)
+        yn = float(y) / float(h)
+        if xn < 0.2 and yn < 0.2:
+            top_left_candidates.add(str(tag))
+    diagnostics["top_left_count_before"] = len(top_left_candidates)
+    # Adaptive suppression:
+    # only suppress top-left cluster when it dominates detections and there are
+    # meaningful points elsewhere (typical legend/title-block pollution pattern).
+    suppress_top_left = (
+        len(top_left_candidates) >= 3
+        and len(top_left_candidates) >= int(0.6 * max(1, len(all_points)))
+        and (len(all_points) - len(top_left_candidates)) > 0
+    )
+
+    for tag, (x, y) in all_points.items():
         xn = float(x) / float(w)
         yn = float(y) / float(h)
         keep = True
         if roi is not None:
             x0, y0, x1, y1 = roi
-            keep = (x0 <= xn <= x1) and (y0 <= yn <= y1)
-        # Hard guard for common misleading corner labels.
-        if xn < 0.2 and yn < 0.2:
+            inside_roi = (x0 <= xn <= x1) and (y0 <= yn <= y1)
+            if not inside_roi:
+                keep = False
+                diagnostics["dropped_outside_roi_count"] += 1
+        if suppress_top_left and str(tag) in top_left_candidates:
             keep = False
+            diagnostics["dropped_top_left_count"] += 1
         if keep:
             out[str(tag)] = (float(x), float(y))
-    return out
+    diagnostics["kept_count"] = len(out)
+    diagnostics["dropped_count"] = diagnostics["raw_count"] - diagnostics["kept_count"]
+    diagnostics["top_left_suppressed"] = bool(suppress_top_left)
+    return out, diagnostics
 
 
 def build_scene_document(
@@ -122,7 +156,7 @@ def build_scene_document(
         raw_detected = dict(detected_positions)
 
     pixel_points = load_points(raw_detected)
-    pixel_points = _filter_points_on_drawing(pixel_points, safe_plan, image_shape)
+    pixel_points, filter_diag = _filter_points_on_drawing(pixel_points, safe_plan, image_shape)
     world_points = pixel_to_world(pixel_points, image_shape, plan_width_mm=17500.0)
 
     rows = equipment_dict_to_list(equipment)
@@ -139,6 +173,10 @@ def build_scene_document(
     scene.setdefault("meta", {})
     scene["meta"]["spatial_points_count"] = len(world_points)
     scene["meta"]["spatial_scene_allowed"] = True
+    scene["meta"]["spatial_raw_points_count"] = int(filter_diag.get("raw_count", 0))
+    scene["meta"]["spatial_filtered_points_count"] = int(filter_diag.get("kept_count", len(world_points)))
+    scene["meta"]["spatial_dropped_points_count"] = int(filter_diag.get("dropped_count", 0))
+    scene["meta"]["spatial_filter_diagnostics"] = filter_diag
     return geometry_engine(scene)
 
 
