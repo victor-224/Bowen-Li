@@ -36,6 +36,7 @@ from backend.config import (
 )
 from backend.core.policy_engine import resolve_policy
 from backend.core.spatial_truth_ledger import summarize_truth_status
+from backend.core.spatial_payload import sanitize_spatial_payload
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
@@ -209,14 +210,34 @@ def _pipeline_signature() -> str:
     return _RUNTIME_STATE.build_signature(paths)
 
 
+def _positions_cache_path() -> Path:
+    return runtime_dir_path() / "positions_cache.json"
+
+
+def _invalidate_spatial_runtime_cache(*, clear_positions: bool = False) -> Dict[str, Any]:
+    """Invalidate runtime caches that can preserve stale spatial state."""
+    cleared_payloads = _RUNTIME_STATE.clear_pipeline_cache()
+    cleared_positions = False
+    if clear_positions:
+        p = _positions_cache_path()
+        if p.is_file():
+            try:
+                p.unlink()
+                cleared_positions = True
+            except OSError:
+                cleared_positions = False
+    return {"payload_cache_cleared": int(cleared_payloads), "positions_cache_cleared": bool(cleared_positions)}
+
+
 def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     signature = _pipeline_signature()
     cached = _RUNTIME_STATE.get_cached_payload(signature)
     if cached is not None:
         _CACHE_STATS["hit"] += 1
-        return cached
+        return sanitize_spatial_payload(cached, route="cache_hit")
     _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
+    payload = sanitize_spatial_payload(payload, route="cache_store")
     _RUNTIME_STATE.set_cached_payload(signature=signature, payload=payload)
     return payload
 
@@ -455,7 +476,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             },
         }
         _maybe_attach_vision(payload)
-        return payload
+        return sanitize_spatial_payload(payload, route="build_pipeline_output")
     except Exception:
         status = "error"
         raise
@@ -524,6 +545,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         },
     }
     _maybe_attach_vision(payload)
+    payload = sanitize_spatial_payload(payload, route="build_pipeline_dag")
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
@@ -845,8 +867,9 @@ def get_equipment() -> Any:
         data = load_equipment_from_excel()
     except FileNotFoundError as e:
         return _error_response(str(e), 404)
-    except ValueError as e:
-        return _error_response(str(e), 500)
+    except Exception as e:  # noqa: BLE001
+        code, stage = _classify_pipeline_error_code(str(e))
+        return _error_response_struct(code, _classify_pipeline_error(str(e)), stage, 400)
     return jsonify(data)
 
 
@@ -1019,6 +1042,7 @@ def upload_project_files() -> Any:
 
     plan_saved = False
     excel_saved = False
+    plan_uploaded = False
     for field, storage in files:
         name = (storage.filename or "").lower()
         if not name:
@@ -1027,6 +1051,7 @@ def upload_project_files() -> Any:
         if field == "plan_file" or name.endswith((".png", ".jpg", ".jpeg", ".pdf")):
             target = runtime_dir / f"uploaded_layout{Path(name).suffix}"
             storage.save(target)
+            plan_uploaded = True
             if target.suffix.lower() == ".pdf":
                 try:
                     first_page_to_layout_png(target, runtime_plan_path())
@@ -1066,6 +1091,8 @@ def upload_project_files() -> Any:
     if not (plan_saved and excel_saved):
         return _error_response("Missing required layout and/or excel file after upload", 400)
 
+    cache_info = _invalidate_spatial_runtime_cache(clear_positions=plan_uploaded)
+
     task_id = _RUNTIME_STATE.new_task("Upload received")
     signature = _pipeline_signature()
     ctx = _register_task_context(task_id, signature)
@@ -1074,7 +1101,15 @@ def upload_project_files() -> Any:
         signature=signature,
         builder=lambda: _build_pipeline_dag(ctx),
     )
-    return jsonify({"success": True, "task_id": task_id, "status": TASK_QUEUED, "message": "Processing started"})
+    return jsonify(
+        {
+            "success": True,
+            "task_id": task_id,
+            "status": TASK_QUEUED,
+            "message": "Processing started",
+            "cache": cache_info,
+        }
+    )
 
 
 @app.get("/api/task/<task_id>")

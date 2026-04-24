@@ -764,6 +764,12 @@ function normalizeSceneItems(sceneDoc) {
   return [];
 }
 
+function isSpatialSceneAllowed(pipelineDoc) {
+  const c = pipelineDoc && pipelineDoc.spatial_contract;
+  if (!c || typeof c !== "object") return true;
+  return Boolean(c.scene_allowed);
+}
+
 function updateInfoPanel(row) {
   if (!row) {
     infoTagEl.textContent = "—";
@@ -903,14 +909,19 @@ async function refreshScene() {
   const wallsDoc = pipeline.walls || {};
   const relationsDoc = pipeline.relations || {};
   const meta = sceneDoc.meta || sceneDoc?.scene?.meta || {};
-  const items = normalizeSceneItems(sceneDoc);
+  const sceneAllowed = isSpatialSceneAllowed(pipeline);
+  const items = sceneAllowed ? normalizeSceneItems(sceneDoc) : [];
   const wallsCount = Array.isArray(wallsDoc.walls)
     ? wallsDoc.walls.length
     : Array.isArray(sceneDoc.walls)
       ? sceneDoc.walls.length
       : 0;
   const relCount = typeof relationsDoc === "object" ? Object.keys(relationsDoc).length : 0;
-  sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"}`;
+  const modeNote = sceneAllowed ? "Spatial mode: scene enabled" : "Equipment Only Mode — No spatial scene available";
+  sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"} · ${modeNote}`;
+  if (!sceneAllowed) {
+    pushLog("[SPATIAL_TRACE] frontend blocked fake render (scene_allowed=false)", "warn");
+  }
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);
   const box = new THREE.Box3().setFromObject(threeCtx.equipmentGroup);
