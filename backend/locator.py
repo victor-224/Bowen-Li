@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import json
 from pathlib import Path
@@ -9,9 +10,14 @@ from typing import Dict, Iterable, Tuple
 
 import cv2
 
+from backend.core.spatial_contract import (
+    SpatialMode,
+    build_spatial_integrity_contract,
+)
 from backend.pickpoint import pick_points_on_plan
 
 _TAG_PATTERN = re.compile(r"[A-Z]\s*\d{2,4}\s*[A-Z]?", re.IGNORECASE)
+logger = logging.getLogger("industrial_digital_twin.spatial_debug")
 
 
 def _repo_root() -> Path:
@@ -234,13 +240,18 @@ def detect_positions_with_confidence(
             pdf_out = {}
 
     out = _merge_votes(ocr_out, pdf_out)
-
     allowed = set(allowed_tags) if allowed_tags is not None else None
     if allowed is not None:
         out = {k: v for k, v in out.items() if k in allowed}
     if out:
         if allowed is not None:
-            return _estimate_missing_positions(out, allowed)
+            # Keep REAL source points only. Missing tags can be estimated for
+            # preview usage, but must be explicitly tagged as visual-only.
+            merged = _estimate_missing_positions(dict(out), allowed)
+            for v in merged.values():
+                if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
+                    v["visual_only"] = True
+            return merged
         return out
 
     # fallback 1: manual pickpoint (only if GUI available)
@@ -255,6 +266,9 @@ def detect_positions_with_confidence(
                 out = {k: v for k, v in out.items() if k in allowed}
             if allowed is not None:
                 out = _estimate_missing_positions(out, allowed)
+                for v in out.values():
+                    if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
+                        v["visual_only"] = True
             _save_cached_positions(out)
             return out
         except Exception:
@@ -266,15 +280,108 @@ def detect_positions_with_confidence(
         cached = {k: v for k, v in cached.items() if k in allowed}
     if cached:
         if allowed is not None:
-            return _estimate_missing_positions(cached, allowed)
+            merged = _estimate_missing_positions(cached, allowed)
+            for v in merged.values():
+                if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
+                    v["visual_only"] = True
+            return merged
         return cached
 
     # fallback 3: clustering estimate only if allowed tags known
     if allowed is not None:
         estimated = _estimate_missing_positions({}, allowed)
+        for v in estimated.values():
+            if isinstance(v, dict):
+                v["visual_only"] = True
         _save_cached_positions(estimated)
         return estimated
     raise RuntimeError("No positions detected and no fallback available.")
+
+
+def resolve_spatial_positions_with_contract(
+    plan_path: Path | None = None,
+    allowed_tags: set[str] | None = None,
+    pdf_source_path: Path | None = None,
+) -> Dict[str, object]:
+    """
+    Resolve positions + authoritative SpatialIntegrityContract in one place.
+
+    Returns:
+      {
+        "positions": {tag -> {"pos":[x,y], "confidence", "source", ...}},
+        "spatial_contract": {...}
+      }
+    """
+    p = plan_path if plan_path is not None else default_plan_path()
+    positions: Dict[str, Dict[str, object]] = {}
+    reason = ""
+    source = "none"
+
+    # Plan readability gate for REAL mode.
+    plan_readable = False
+    if p.is_file():
+        try:
+            plan_readable = cv2.imread(str(p), cv2.IMREAD_COLOR) is not None
+        except Exception:  # noqa: BLE001
+            plan_readable = False
+
+    try:
+        positions = detect_positions_with_confidence(
+            plan_path=p, allowed_tags=allowed_tags, pdf_source_path=pdf_source_path
+        )
+    except Exception as e:  # noqa: BLE001
+        positions = {}
+        reason = str(e)
+
+    if positions:
+        # Prefer the dominant source among returned tags.
+        src_count: Dict[str, int] = {}
+        has_visual_only = False
+        for v in positions.values():
+            if not isinstance(v, dict):
+                continue
+            s = str(v.get("source") or "unknown")
+            src_count[s] = src_count.get(s, 0) + 1
+            has_visual_only = has_visual_only or bool(v.get("visual_only", False))
+        source = max(src_count.items(), key=lambda x: x[1])[0] if src_count else "unknown"
+        if source == "cluster_estimate" or has_visual_only:
+            contract = build_spatial_integrity_contract(
+                spatial_valid=False,
+                spatial_mode=SpatialMode.VISUAL_ONLY,
+                source=source,
+                scene_allowed=False,
+                visual_allowed=True,
+                reason=reason or "synthetic fallback coordinates",
+            )
+        elif source in {"ocr", "pdf_text", "ocr_vote", "pickpoint"}:
+            contract = build_spatial_integrity_contract(
+                spatial_valid=True,
+                spatial_mode=SpatialMode.REAL,
+                source=source,
+                scene_allowed=True,
+                visual_allowed=True,
+                reason=reason,
+            )
+        else:
+            contract = build_spatial_integrity_contract(
+                spatial_valid=plan_readable,
+                spatial_mode=SpatialMode.REAL if plan_readable else SpatialMode.DEGRADED,
+                source=source,
+                scene_allowed=bool(plan_readable),
+                visual_allowed=True,
+                reason=reason or ("unknown source but plan unreadable" if not plan_readable else ""),
+            )
+    else:
+        contract = build_spatial_integrity_contract(
+            spatial_valid=False,
+            spatial_mode=SpatialMode.DEGRADED,
+            source="none",
+            scene_allowed=False,
+            visual_allowed=True,
+            reason=reason or ("plan unreadable" if not plan_readable else "empty detection"),
+        )
+
+    return {"positions": positions, "spatial_contract": contract}
 
 
 def detect_positions(

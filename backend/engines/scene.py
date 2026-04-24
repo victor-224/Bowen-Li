@@ -19,8 +19,9 @@ from backend.asset_contract import (
 )
 from backend.core.execution_policy import resolve_execution_policy
 from backend.core.input_contract import evaluate_input_contract
+from backend.core.spatial_contract import SpatialMode, make_spatial_contract
 from backend.engines.geometry import geometry_engine
-from backend.locator import detect_positions_with_confidence, pixel_to_mm
+from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
 from backend.walls import parse_walls_and_rooms
 
@@ -42,6 +43,7 @@ def _degraded_empty_layout(
     equipment: Mapping[str, Mapping[str, Any]],
     warning: str = "missing_demo_asset",
     input_contract: Optional[Dict[str, Any]] = None,
+    spatial_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return a safe empty-layout scene that keeps downstream contracts stable."""
     rows = equipment_dict_to_list(equipment)
@@ -54,6 +56,16 @@ def _degraded_empty_layout(
             "input_state": contract.get("state", "degraded_layout"),
             "input_contract": contract,
             "execution_policy": contract.get("execution_policy"),
+            "spatial_contract": spatial_contract
+            if isinstance(spatial_contract, dict)
+            else make_spatial_contract(
+                spatial_valid=False,
+                spatial_mode=SpatialMode.DEGRADED,
+                source="none",
+                scene_allowed=False,
+                visual_allowed=True,
+                reason="layout_unavailable",
+            ),
         }
     )
     scene["equipment"] = items
@@ -92,10 +104,19 @@ def build_scene_document(
             plan_path=None,
         )
         policy = resolve_execution_policy(contract)
+        spatial_contract = make_spatial_contract(
+            spatial_valid=False,
+            spatial_mode=SpatialMode.DEGRADED,
+            source="none",
+            scene_allowed=False,
+            visual_allowed=True,
+            reason="layout_missing_or_corrupted",
+        )
         return _degraded_empty_layout(
             equipment,
             warning="missing_demo_asset",
             input_contract={**contract, "execution_policy": policy},
+            spatial_contract=spatial_contract,
         )
     if safe_load_image(str(safe_plan)) is None:
         logger.warning(
@@ -110,10 +131,19 @@ def build_scene_document(
             plan_path=str(safe_plan),
         )
         policy = resolve_execution_policy(contract)
+        spatial_contract = make_spatial_contract(
+            spatial_valid=False,
+            spatial_mode=SpatialMode.DEGRADED,
+            source="none",
+            scene_allowed=False,
+            visual_allowed=True,
+            reason="layout_unreadable",
+        )
         return _degraded_empty_layout(
             equipment,
             warning="missing_demo_asset",
             input_contract={**contract, "execution_policy": policy},
+            spatial_contract=spatial_contract,
         )
 
     # Evaluate contract with resolved plan path so state is explicit and accurate.
@@ -125,11 +155,31 @@ def build_scene_document(
     policy = resolve_execution_policy(contract)
 
     allowed_tags = set(str(t) for t in equipment.keys())
-    detected = (
-        dict(detected_positions)
-        if detected_positions is not None
-        else detect_positions_with_confidence(plan_path=safe_plan, allowed_tags=allowed_tags)
-    )
+    if detected_positions is not None:
+        detected = dict(detected_positions)
+        spatial_contract = make_spatial_contract(
+            spatial_valid=True,
+            spatial_mode=SpatialMode.REAL,
+            source="external",
+            scene_allowed=True,
+            visual_allowed=True,
+            reason="external_positions_provided",
+        )
+    else:
+        resolved = resolve_spatial_positions_with_contract(
+            plan_path=safe_plan, allowed_tags=allowed_tags
+        )
+        detected = dict(resolved.get("positions", {}))
+        spatial_contract = dict(resolved.get("spatial_contract", {}))
+
+    # CRITICAL GATE: synthetic / degraded modes must not feed scene geometry.
+    if not bool(spatial_contract.get("scene_allowed")):
+        return _degraded_empty_layout(
+            equipment,
+            warning="missing_demo_asset",
+            input_contract={**contract, "execution_policy": policy},
+            spatial_contract=spatial_contract,
+        )
     pixel_positions: Dict[str, tuple[int, int]] = {}
     conf_map: Dict[str, float] = {}
     for tag, v in detected.items():
@@ -155,6 +205,7 @@ def build_scene_document(
     scene["meta"]["input_state"] = contract.get("state", "valid")
     scene["meta"]["input_contract"] = contract
     scene["meta"]["execution_policy"] = policy
+    scene["meta"]["spatial_contract"] = spatial_contract
     return geometry_engine(scene)
 
 
