@@ -85,10 +85,7 @@ class AssetMissingError(AssetContractViolation):
         super().__init__(
             contract,
             stage=stage,
-            message=(
-                f"Asset '{contract.name}' missing. Expected producer stage: "
-                f"{contract.produced_by}."
-            ),
+            message="Layout image unavailable (demo or upload corrupted). Pipeline continues in degraded mode.",
         )
 
 
@@ -99,10 +96,7 @@ class AssetCorruptedError(AssetContractViolation):
         super().__init__(
             contract,
             stage=stage,
-            message=(
-                f"Asset '{contract.name}' is corrupted or unreadable. "
-                f"Produced by stage: {contract.produced_by}."
-            ),
+            message="Layout image unavailable (demo or upload corrupted). Pipeline continues in degraded mode.",
         )
 
 
@@ -193,7 +187,7 @@ def load_asset(
     """Load a contracted asset with corruption validation and structured error surface."""
     path = validate_asset(contract, stage=stage, override_path=override_path)
     if reader == "cv2":
-        img = cv2.imread(str(path))
+        img = safe_load_image(str(path))
         if img is None:
             log_asset_status(contract, "CORRUPTED")
             raise AssetCorruptedError(contract, stage=stage or (contract.consumed_by[0] if contract.consumed_by else ""))
@@ -205,3 +199,11 @@ def load_asset(
         with open(path, "rb") as f:
             return f.read()
     raise ValueError(f"Unsupported asset reader: {reader}")
+
+
+def safe_load_image(path: str) -> Any:
+    """Safe OpenCV image load: returns None when missing/corrupted instead of raising."""
+    img = cv2.imread(path)
+    if img is None:
+        return None
+    return img
