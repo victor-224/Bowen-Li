@@ -171,6 +171,44 @@ a {
   display: none;
 }
 
+.layout-inspector.card-nested {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+
+.layout-inspector .inspector-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.layout-inspector .inspector-path {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.layout-inspector .inspector-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.layout-inspector .inspector-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 .file-chip {
   display: flex;
   align-items: center;

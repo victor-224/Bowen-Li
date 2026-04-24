@@ -55,6 +55,18 @@
         </div>
         <p id="upload-feedback" aria-live="polite"></p>
         <p id="loaded-filenames" style="font-size:0.82rem;">No files added yet. Include at least one layout (PDF/PNG) and an equipment list (.xlsx) for a full run.</p>
+        <div class="layout-inspector card-nested" id="layout-inspector" hidden aria-live="polite">
+          <h3 class="inspector-title">Upload file inspector</h3>
+          <p class="inspector-path"><span class="status-k">Layout file</span> <code id="inspector-file">—</code></p>
+          <ul class="inspector-list" id="inspector-rows">
+            <li><span class="status-k">Type</span> <span id="inspector-type">—</span></li>
+            <li><span class="status-k">Resolution</span> <span id="inspector-resolution">—</span></li>
+            <li><span class="status-k">Decode</span> <span id="inspector-decode">—</span></li>
+            <li><span class="status-k">Readable</span> <span id="inspector-readable">—</span></li>
+            <li><span class="status-k">Used for spatial</span> <span id="inspector-spatial">—</span></li>
+          </ul>
+          <p class="inspector-note" id="inspector-note" hidden></p>
+        </div>
       </div>
 
       <div class="card" id="status-section">

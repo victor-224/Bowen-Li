@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping
 
-
 def _sanitize_scene_items(items: Any) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     if not isinstance(items, list):
@@ -49,6 +48,10 @@ def sanitize_spatial_payload(
     p["walls"] = {"walls": [], "rooms": [], "center": [0.0, 0.0]}
     p["relations"] = {}
     p["spatial_warning"] = "Equipment Only Mode: no spatial scene available."
+    # File may still decode; spatial pipeline is not using it for geometry.
+    insp = dict(p.get("layout_inspector") or {})
+    insp["used_for_spatial"] = False
+    p["layout_inspector"] = insp
     if route:
         p["spatial_sanitized_route"] = str(route)
     return p

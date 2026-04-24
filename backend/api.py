@@ -42,6 +42,7 @@ from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 from backend.plan_upload_validate import validate_layout_raster
+from backend.layout_inspector import inspect_runtime_layout
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -488,6 +489,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "relations": relations,
             "walls": walls_doc,
             "layout_graph": layout_graph,
+            "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
             "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
             "policy": resolve_policy(
                 contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
@@ -557,6 +559,7 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         "relations": relations,
         "walls": walls_doc,
         "layout_graph": layout_graph,
+        "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
         "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
         "policy": resolve_policy(
             contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
@@ -946,6 +949,13 @@ def get_files() -> Any:
     return jsonify(out)
 
 
+@app.get("/api/layout/inspect")
+def get_layout_inspect() -> Any:
+    """Upload File Inspector: health of committed runtime plan.png (no pipeline run)."""
+    info = inspect_runtime_layout(runtime_plan_path())
+    return jsonify({"success": True, "layout_inspector": info})
+
+
 @app.get("/api/status")
 def get_status() -> Any:
     classified = classify_files(data_dir_path())
@@ -1193,6 +1203,7 @@ def upload_project_files() -> Any:
             "status": TASK_QUEUED,
             "message": "Processing started",
             "cache": cache_info,
+            "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
         }
     )
 

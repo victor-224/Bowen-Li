@@ -46,6 +46,14 @@ const aiStatusEndpoint = document.getElementById("ai-status-endpoint");
 const aiStatusCopilotModel = document.getElementById("ai-status-copilot-model");
 const aiStatusVisionModel = document.getElementById("ai-status-vision-model");
 const aiStatusState = document.getElementById("ai-status-state");
+const layoutInspectorEl = document.getElementById("layout-inspector");
+const inspectorFileEl = document.getElementById("inspector-file");
+const inspectorTypeEl = document.getElementById("inspector-type");
+const inspectorResolutionEl = document.getElementById("inspector-resolution");
+const inspectorDecodeEl = document.getElementById("inspector-decode");
+const inspectorReadableEl = document.getElementById("inspector-readable");
+const inspectorSpatialEl = document.getElementById("inspector-spatial");
+const inspectorNoteEl = document.getElementById("inspector-note");
 
 let activeTaskId = null;
 let _entrySeq = 0;
@@ -314,14 +322,60 @@ function updateLoadedSummary() {
   loadedNamesEl.textContent = `${n} file(s) · Plan: ${plan ? plan.name : "—"} · Excel: ${excel ? excel.name : "—"}`;
 }
 
+function formatUploadError(body, httpStatus) {
+  const err = body && body.error;
+  if (err && typeof err === "object" && err.message) {
+    const code = err.code != null ? String(err.code) : "ERROR";
+    return `${code}: ${String(err.message)}`;
+  }
+  if (typeof err === "string" && err) return err;
+  return `HTTP ${httpStatus}`;
+}
+
+/**
+ * @param {object | null | undefined} info - from API layout_inspector
+ */
+function updateLayoutInspectorPanel(info) {
+  if (!layoutInspectorEl) return;
+  if (!info || typeof info !== "object" || !info.exists) {
+    layoutInspectorEl.hidden = true;
+    if (inspectorNoteEl) inspectorNoteEl.hidden = true;
+    return;
+  }
+  layoutInspectorEl.hidden = false;
+  const shortPath = String(info.layout_file || "").split(/[/\\]/).pop() || "plan.png";
+  if (inspectorFileEl) inspectorFileEl.textContent = shortPath;
+  const magic = info.magic_detected || info.file_type || "—";
+  if (inspectorTypeEl) inspectorTypeEl.textContent = String(magic).toUpperCase();
+  if (inspectorResolutionEl) inspectorResolutionEl.textContent = info.resolution || "—";
+  if (inspectorDecodeEl) inspectorDecodeEl.textContent = info.decode_ok ? "OK" : "Fail";
+  if (inspectorReadableEl) inspectorReadableEl.textContent = info.readable ? "Yes" : "No";
+  if (inspectorSpatialEl) inspectorSpatialEl.textContent = info.used_for_spatial ? "Yes" : "No";
+  if (inspectorNoteEl) {
+    const sc = info.spatial_contract_scene_allowed;
+    if (sc === false) {
+      inspectorNoteEl.textContent =
+        "Spatial contract: scene not using layout coordinates (equipment-only / degraded).";
+      inspectorNoteEl.hidden = false;
+    } else if (info.validation_reason && !info.validation_ok) {
+      inspectorNoteEl.textContent = `Validation: ${info.validation_reason}`;
+      inspectorNoteEl.hidden = false;
+    } else {
+      inspectorNoteEl.textContent = "";
+      inspectorNoteEl.hidden = true;
+    }
+  }
+}
+
 async function uploadProjectFiles() {
   const form = buildUploadForm();
   const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success !== true) {
-    const reason = body.error || `HTTP ${res.status}`;
+    const reason = formatUploadError(body, res.status);
     throw new Error(`Upload failed: ${reason}`);
   }
+  if (body.layout_inspector) updateLayoutInspectorPanel(body.layout_inspector);
   return body;
 }
 
@@ -934,6 +988,27 @@ async function refreshScene() {
     threeCtx.controls.target.copy(center);
     threeCtx.controls.update();
   }
+  if (pipeline.layout_inspector) {
+    const merged = { ...pipeline.layout_inspector };
+    if (pipeline.spatial_contract && typeof pipeline.spatial_contract === "object") {
+      merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
+    }
+    updateLayoutInspectorPanel(merged);
+  } else {
+    try {
+      const inspRes = await fetch(`${API_BASE}/api/layout/inspect`);
+      const inspBody = await inspRes.json().catch(() => ({}));
+      if (inspBody.success && inspBody.layout_inspector) {
+        const merged = { ...inspBody.layout_inspector };
+        if (pipeline.spatial_contract && typeof pipeline.spatial_contract === "object") {
+          merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
+        }
+        updateLayoutInspectorPanel(merged);
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function wireFileUi() {
@@ -997,7 +1072,9 @@ async function handleUploadClick() {
     let userMsg = msg;
     if (msg.includes("OCR_FAILED")) userMsg = "OCR failed: no equipment tags detected in layout.";
     else if (msg.includes("INVALID_EXCEL")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
-    else if (msg.includes("INVALID_LAYOUT")) userMsg = "No layout detected or unreadable plan image.";
+    else if (msg.includes("INVALID_LAYOUT_IMAGE")) {
+      userMsg = msg.replace(/^Upload failed:\s*/i, "").replace(/^INVALID_LAYOUT_IMAGE:\s*/i, "");
+    } else if (msg.includes("INVALID_LAYOUT")) userMsg = "No layout detected or unreadable plan image.";
     else if (msg.includes("UPLOAD_TOO_LARGE") || msg.includes("upload too large")) {
       userMsg = "Upload too large. Please use smaller files.";
     } else if (msg.includes("CANCELLED")) userMsg = "Task cancelled.";
