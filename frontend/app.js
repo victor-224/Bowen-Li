@@ -55,6 +55,9 @@ const inspectorReadableEl = document.getElementById("inspector-readable");
 const inspectorSpatialEl = document.getElementById("inspector-spatial");
 const inspectorNoteEl = document.getElementById("inspector-note");
 
+/** Avoid duplicate SPATIAL_TRACE lines when refreshScene runs repeatedly while blocked. */
+let _spatialBlockLogged = false;
+
 let activeTaskId = null;
 let _entrySeq = 0;
 /** @type {Array<{ id: string, file: File, role: 'layout' | 'equipment' | 'supporting' | 'other', manualOverride: boolean }>} */
@@ -333,6 +336,19 @@ function formatUploadError(body, httpStatus) {
 }
 
 /**
+ * Used for spatial: only Yes/No after spatial contract is known; "—" while pipeline has not applied contract yet.
+ * @param {object} info - layout_inspector + optional spatial_contract_scene_allowed, spatial_contract_pending
+ */
+function usedForSpatialDisplay(info) {
+  const sc = info.spatial_contract_scene_allowed;
+  if (info.spatial_contract_pending || sc === undefined) {
+    return "—";
+  }
+  if (sc === false) return "No";
+  return info.used_for_spatial ? "Yes" : "No";
+}
+
+/**
  * @param {object | null | undefined} info - from API layout_inspector
  */
 function updateLayoutInspectorPanel(info) {
@@ -350,10 +366,14 @@ function updateLayoutInspectorPanel(info) {
   if (inspectorResolutionEl) inspectorResolutionEl.textContent = info.resolution || "—";
   if (inspectorDecodeEl) inspectorDecodeEl.textContent = info.decode_ok ? "OK" : "Fail";
   if (inspectorReadableEl) inspectorReadableEl.textContent = info.readable ? "Yes" : "No";
-  if (inspectorSpatialEl) inspectorSpatialEl.textContent = info.used_for_spatial ? "Yes" : "No";
+  if (inspectorSpatialEl) inspectorSpatialEl.textContent = usedForSpatialDisplay(info);
   if (inspectorNoteEl) {
     const sc = info.spatial_contract_scene_allowed;
-    if (sc === false) {
+    if (info.spatial_contract_pending || sc === undefined) {
+      inspectorNoteEl.textContent =
+        "Pipeline running or contract not loaded yet — \"Used for spatial\" shows Yes/No only after the spatial contract is applied.";
+      inspectorNoteEl.hidden = false;
+    } else if (sc === false) {
       inspectorNoteEl.textContent =
         "Spatial contract: scene not using layout coordinates (equipment-only / degraded).";
       inspectorNoteEl.hidden = false;
@@ -375,7 +395,12 @@ async function uploadProjectFiles() {
     const reason = formatUploadError(body, res.status);
     throw new Error(`Upload failed: ${reason}`);
   }
-  if (body.layout_inspector) updateLayoutInspectorPanel(body.layout_inspector);
+  if (body.layout_inspector) {
+    updateLayoutInspectorPanel({
+      ...body.layout_inspector,
+      spatial_contract_pending: true,
+    });
+  }
   return body;
 }
 
@@ -974,7 +999,12 @@ async function refreshScene() {
   const modeNote = sceneAllowed ? "Spatial mode: scene enabled" : "Equipment Only Mode — No spatial scene available";
   sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"} · ${modeNote}`;
   if (!sceneAllowed) {
-    pushLog("[SPATIAL_TRACE] frontend blocked fake render (scene_allowed=false)", "warn");
+    if (!_spatialBlockLogged) {
+      pushLog("[SPATIAL_TRACE] frontend blocked fake render (scene_allowed=false)", "warn");
+      _spatialBlockLogged = true;
+    }
+  } else {
+    _spatialBlockLogged = false;
   }
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);
@@ -988,9 +1018,18 @@ async function refreshScene() {
     threeCtx.controls.target.copy(center);
     threeCtx.controls.update();
   }
+  const scKnown =
+    pipeline.spatial_contract &&
+    typeof pipeline.spatial_contract === "object" &&
+    pipeline.spatial_contract.scene_allowed !== undefined &&
+    pipeline.spatial_contract.scene_allowed !== null;
+
   if (pipeline.layout_inspector) {
-    const merged = { ...pipeline.layout_inspector };
-    if (pipeline.spatial_contract && typeof pipeline.spatial_contract === "object") {
+    const merged = {
+      ...pipeline.layout_inspector,
+      spatial_contract_pending: !scKnown,
+    };
+    if (scKnown) {
       merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
     }
     updateLayoutInspectorPanel(merged);
@@ -999,8 +1038,11 @@ async function refreshScene() {
       const inspRes = await fetch(`${API_BASE}/api/layout/inspect`);
       const inspBody = await inspRes.json().catch(() => ({}));
       if (inspBody.success && inspBody.layout_inspector) {
-        const merged = { ...inspBody.layout_inspector };
-        if (pipeline.spatial_contract && typeof pipeline.spatial_contract === "object") {
+        const merged = {
+          ...inspBody.layout_inspector,
+          spatial_contract_pending: !scKnown,
+        };
+        if (scKnown) {
           merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
         }
         updateLayoutInspectorPanel(merged);
