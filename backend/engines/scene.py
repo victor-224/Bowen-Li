@@ -25,6 +25,7 @@ from backend.core.spatial_truth_ledger import log_spatial_event, validate_contra
 from backend.core.spatial_source_normalizer import normalize_spatial_sources
 from backend.core.spatial_canonical_model import build_canonical_space
 from backend.core.spatial_authority import resolve_spatial_authority
+from backend.core.spatial_preflight import validate_spatial_consistency
 from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -275,11 +276,29 @@ def build_scene_document(
             if tag in positions_full:
                 cluster_mm[tag] = positions_full[tag]
 
+    preflight = validate_spatial_consistency(
+        list(canonical),
+        positions_full,
+        normalized_points=normalized,
+        image_shape=image_shape,
+        plan_width_mm=plan_width_mm,
+    )
+
+    contract_for_authority = dict(spatial_contract)
+    if not bool(preflight.get("valid")):
+        contract_for_authority = {
+            **contract_for_authority,
+            "spatial_valid": False,
+            "scene_allowed": False,
+            "spatial_mode": SpatialMode.DEGRADED,
+            "reason": "preflight spatial collapse detected",
+        }
+
     authority = resolve_spatial_authority(
         canonical_points=canonical,
         layout_mm_points=positions_full,
         cluster_points=cluster_mm,
-        contract=spatial_contract,
+        contract=contract_for_authority,
         allowed_tags=allowed_tags,
         image_shape=image_shape,
         plan_width_mm=plan_width_mm,
@@ -287,16 +306,27 @@ def build_scene_document(
     )
 
     if authority.get("mode") != "FINAL":
+        spatial_contract_out = dict(spatial_contract)
+        if not bool(preflight.get("valid")):
+            spatial_contract_out.update(
+                {
+                    "spatial_valid": False,
+                    "scene_allowed": False,
+                    "spatial_mode": SpatialMode.DEGRADED,
+                    "reason": "preflight spatial collapse detected",
+                }
+            )
         degraded_contract = {
             **contract,
             "execution_policy": policy,
             "spatial_authority": authority,
+            "spatial_preflight": preflight,
         }
         return _degraded_empty_layout(
             equipment,
             warning="spatial_authority_no_trusted",
             input_contract=degraded_contract,
-            spatial_contract=spatial_contract,
+            spatial_contract=spatial_contract_out,
         )
 
     # Single geometry source: authority output only (layout-mm tuples for scene_spec).
@@ -328,6 +358,7 @@ def build_scene_document(
     scene["meta"]["spatial_normalized"] = normalized
     scene["meta"]["spatial_canonical"] = canonical
     scene["meta"]["spatial_authority"] = authority
+    scene["meta"]["spatial_preflight"] = preflight
     usage_check = validate_contract_usage(
         contract=spatial_contract,
         scene_input_source=_extract_spatial_source(detected),

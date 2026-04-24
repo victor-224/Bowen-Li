@@ -103,6 +103,7 @@ def normalize_spatial_sources(raw_points: List[Mapping[str, Any]]) -> List[Dict[
             {
                 "tag": tag,
                 "source": src,
+                "raw_source": raw_src,
                 "pixel": pix,
                 "confidence": conf,
                 "is_valid_spatial": bool(is_valid),
