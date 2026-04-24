@@ -10,8 +10,11 @@ after ``repair_assets`` / ``rebuild_scene``.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from backend.agent.execution_trace import ExecutionTrace
 
 logger = logging.getLogger("industrial_digital_twin.tool_orchestrator")
 
@@ -186,26 +189,36 @@ def execute_intent(
     warnings: List[str] = []
     executed: List[Dict[str, Any]] = []
     final_state: Dict[str, Any] = {}
+    session_id = (
+        str(context.get("session_id")) if isinstance(context, dict) and context.get("session_id") else f"exec-{int(time.time() * 1000)}"
+    )
+    trace = ExecutionTrace(session_id=session_id)
+    trace.start_trace(context if isinstance(context, dict) else {})
 
     if not isinstance(context, dict):
-        return {
+        out = {
             "success": False,
             "executed_steps": [],
             "final_state": {},
             "warnings": ["context must be a dict"],
             "error": "INVALID_CONTEXT",
         }
+        trace.log_decision("validation", {"ok": False, "error": "INVALID_CONTEXT"})
+        trace.end_trace(out)
+        return out
 
     steps = _plan_from_context(context)
+    trace.log_decision("plan_generated", {"step_count": len(steps), "steps": steps})
     if len(steps) > MAX_STEPS:
         warnings.append(f"plan truncated to {MAX_STEPS} steps")
         steps = steps[:MAX_STEPS]
+        trace.log_decision("plan_truncated", {"max_steps": MAX_STEPS})
 
     for i, step in enumerate(steps):
         ok_meta, err = _validate_step(step)
         if not ok_meta:
             warnings.append(f"step {i} invalid: {err}")
-            return {
+            out = {
                 "success": False,
                 "executed_steps": executed,
                 "final_state": final_state,
@@ -213,11 +226,14 @@ def execute_intent(
                 "error": err,
                 "failed_at_index": i,
             }
+            trace.log_decision("step_validation_failed", {"index": i, "error": err, "step": step})
+            trace.end_trace(out)
+            return out
         tool = str(step["tool"])
         args = _normalize_args(step.get("args"))
         fn = _TOOL_REGISTRY.get(tool)
         if fn is None:
-            return {
+            out = {
                 "success": False,
                 "executed_steps": executed,
                 "final_state": final_state,
@@ -225,14 +241,20 @@ def execute_intent(
                 "error": f"unregistered tool: {tool}",
                 "failed_at_index": i,
             }
+            trace.log_decision("tool_registry_failed", {"index": i, "tool": tool})
+            trace.end_trace(out)
+            return out
         try:
+            t0 = time.perf_counter()
             result = fn(args, runtime_state)
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            trace.log_step_execution(tool, args, result if isinstance(result, dict) else {"value": result}, dt_ms)
         except Exception as e:  # noqa: BLE001 — containment
             logger.exception("tool_orchestrator: tool=%s failed", tool)
             executed.append(
                 {"tool": tool, "args": args, "ok": False, "error": str(e), "reason": step.get("reason", "")}
             )
-            return {
+            out = {
                 "success": False,
                 "executed_steps": executed,
                 "final_state": final_state,
@@ -240,6 +262,9 @@ def execute_intent(
                 "error": str(e),
                 "failed_at_index": i,
             }
+            trace.log_decision("step_exception", {"index": i, "tool": tool, "error": str(e)})
+            trace.end_trace(out)
+            return out
         step_ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
         executed.append(
             {
@@ -252,7 +277,7 @@ def execute_intent(
         )
         final_state[tool] = result
         if not step_ok:
-            return {
+            out = {
                 "success": False,
                 "executed_steps": executed,
                 "final_state": final_state,
@@ -260,13 +285,18 @@ def execute_intent(
                 "error": (result or {}).get("error", "TOOL_FAILED") if isinstance(result, dict) else "TOOL_FAILED",
                 "failed_at_index": i,
             }
+            trace.log_decision("step_failed", {"index": i, "tool": tool})
+            trace.end_trace(out)
+            return out
 
-    return {
+    out = {
         "success": True,
         "executed_steps": executed,
         "final_state": final_state,
         "warnings": warnings,
     }
+    trace.end_trace(out)
+    return out
 
 
 __all__ = [
