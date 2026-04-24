@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
 
+from backend.opencv_util import opencv_imread_quiet
+
 
 def _pixel_to_mm(x: float, y: float, img_h: int, scale: float) -> List[float]:
     """Convert image pixel (origin top-left) to plan mm (origin bottom-left)."""
@@ -26,7 +28,8 @@ def parse_walls_and_rooms(
     - contour (outer boundary + room-like regions)
     - hough line (wall line candidates)
     """
-    img = cv2.imread(str(plan_path), cv2.IMREAD_GRAYSCALE)
+    with opencv_imread_quiet():
+        img = cv2.imread(str(plan_path), cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"Cannot read plan image: {plan_path}")
     h, w = img.shape[:2]

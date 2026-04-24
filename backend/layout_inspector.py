@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import cv2
-
 from backend.plan_upload_validate import validate_layout_raster
 
 
@@ -73,19 +71,18 @@ def inspect_runtime_layout(plan_path: Optional[Path] = None) -> Dict[str, Any]:
 
     out["magic_detected"] = _magic_label(head)
 
-    ok_val, reason = validate_layout_raster(p)
+    ok_val, reason, size_wh = validate_layout_raster(p)
     out["validation_ok"] = bool(ok_val)
     out["validation_reason"] = reason or ""
 
-    img = cv2.imread(str(p), cv2.IMREAD_COLOR)
-    if img is not None:
-        h, w = img.shape[:2]
+    if ok_val and size_wh is not None:
+        w, h = size_wh
         out["decode_ok"] = True
         out["width"] = int(w)
         out["height"] = int(h)
         out["resolution"] = f"{w}×{h}"
     else:
-        out["decode_ok"] = False
+        out["decode_ok"] = bool(ok_val)
         out["resolution"] = "—"
 
     out["used_for_spatial"] = bool(out["decode_ok"] and out["validation_ok"])

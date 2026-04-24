@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 
+from backend.opencv_util import opencv_imread_quiet
+
 
 logger = logging.getLogger("industrial_digital_twin.asset_contract")
 
@@ -203,7 +205,8 @@ def load_asset(
 
 def safe_load_image(path: str) -> Any:
     """Safe OpenCV image load: returns None when missing/corrupted instead of raising."""
-    img = cv2.imread(path)
+    with opencv_imread_quiet():
+        img = cv2.imread(path)
     if img is None:
         return None
     return img

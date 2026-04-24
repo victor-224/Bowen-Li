@@ -26,6 +26,7 @@ from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
 from backend.walls import parse_walls_and_rooms
+from backend.opencv_util import opencv_imread_quiet
 
 
 logger = logging.getLogger("industrial_digital_twin.scene")
@@ -35,7 +36,8 @@ SCENE_STAGE = "scene_render"
 
 def safe_load_image(path: str) -> Optional[Any]:
     """Safe image read used by degraded mode guard."""
-    img = cv2.imread(path)
+    with opencv_imread_quiet():
+        img = cv2.imread(path)
     if img is None:
         return None
     return img

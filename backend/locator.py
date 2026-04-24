@@ -16,6 +16,7 @@ from backend.core.spatial_contract import (
 )
 from backend.core.spatial_truth_ledger import log_spatial_event
 from backend.pickpoint import pick_points_on_plan
+from backend.opencv_util import opencv_imread_quiet
 
 _TAG_PATTERN = re.compile(r"[A-Z]\s*\d{2,4}\s*[A-Z]?", re.IGNORECASE)
 logger = logging.getLogger("industrial_digital_twin.spatial_debug")
@@ -28,7 +29,8 @@ def _repo_root() -> Path:
 def default_plan_path() -> Path:
     runtime_plan = _repo_root() / "data" / "runtime" / "plan.png"
     if runtime_plan.is_file():
-        img = cv2.imread(str(runtime_plan), cv2.IMREAD_COLOR)
+        with opencv_imread_quiet():
+            img = cv2.imread(str(runtime_plan), cv2.IMREAD_COLOR)
         if img is not None:
             return runtime_plan
     default_plan = _repo_root() / "data" / "plan_hd.png"
@@ -322,7 +324,8 @@ def resolve_spatial_positions_with_contract(
     plan_readable = False
     if p.is_file():
         try:
-            plan_readable = cv2.imread(str(p), cv2.IMREAD_COLOR) is not None
+            with opencv_imread_quiet():
+                plan_readable = cv2.imread(str(p), cv2.IMREAD_COLOR) is not None
         except Exception:  # noqa: BLE001
             plan_readable = False
 
@@ -423,7 +426,8 @@ def pixel_to_mm(
 ) -> Dict[str, Tuple[float, float]]:
     """Convert pixel map to plan-mm map using plan width scale and image-bottom Y origin."""
     p = plan_path if plan_path is not None else default_plan_path()
-    img = cv2.imread(str(p), cv2.IMREAD_COLOR)
+    with opencv_imread_quiet():
+        img = cv2.imread(str(p), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Cannot read plan image: {p}")
     h, w = img.shape[:2]

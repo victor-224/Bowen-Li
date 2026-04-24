@@ -9,6 +9,8 @@ from typing import Dict, Tuple
 import cv2
 import numpy as np
 
+from backend.opencv_util import opencv_imread_quiet
+
 PICKPOINT_TAGS = [
     "B200",
     "E300",
@@ -29,7 +31,8 @@ def _default_plan_path() -> Path:
 
 
 def _load_bgr(path: Path) -> np.ndarray:
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    with opencv_imread_quiet():
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Cannot read image (missing or unsupported format): {path}")
     return img

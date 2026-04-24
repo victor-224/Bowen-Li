@@ -1,5 +1,12 @@
 """Stable local demo launcher for Industrial Digital Twin backend."""
 
+try:
+    import cv2.utils.logging as _cv2_log
+
+    _cv2_log.setLogLevel(_cv2_log.LOG_LEVEL_SILENT)
+except Exception:  # noqa: BLE001
+    pass
+
 from backend.api import app
 
 

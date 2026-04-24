@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 import cv2
 
+from backend.opencv_util import opencv_imread_quiet
 from backend.api import load_equipment_from_excel
 from backend.engines import collision_engine, web_ui
 from backend.engines.scene import build_scene_document
@@ -22,7 +23,8 @@ def _default_plan_path() -> Path:
 
 def _plan_image_size(path: Path) -> Tuple[int, int]:
     """Return (image_width, image_height) in pixels."""
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    with opencv_imread_quiet():
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Cannot read image (missing or unsupported format): {path}")
     h, w = img.shape[:2]

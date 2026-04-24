@@ -73,11 +73,11 @@ _VISION_TIMEOUT_S = 20
 _RUNTIME_STATE = RuntimeState()
 _UPLOAD_LOG = logging.getLogger("industrial_digital_twin.upload")
 
-# Reduce OpenCV console noise (e.g. corrupt PNG IHDR warnings) in demo mode.
+# Reduce OpenCV console noise (libpng may still print at ERROR level on corrupt reads).
 try:
     import cv2.utils.logging as _cv2_log
 
-    _cv2_log.setLogLevel(_cv2_log.LOG_LEVEL_ERROR)
+    _cv2_log.setLogLevel(_cv2_log.LOG_LEVEL_SILENT)
 except Exception:  # noqa: BLE001
     pass
 
@@ -1094,7 +1094,7 @@ def upload_project_files() -> Any:
             if target.suffix.lower() == ".pdf":
                 try:
                     first_page_to_layout_png(target, runtime_plan_path())
-                    ok_pdf, reason_pdf = validate_layout_raster(runtime_plan_path())
+                    ok_pdf, reason_pdf, _wh_pdf = validate_layout_raster(runtime_plan_path())
                     if not ok_pdf:
                         rp = runtime_plan_path()
                         try:
@@ -1117,7 +1117,7 @@ def upload_project_files() -> Any:
                 except Exception as e:
                     return _error_response(f"Invalid layout PDF: {e}", 400)
             else:
-                ok, reason = validate_layout_raster(target)
+                ok, reason, _wh = validate_layout_raster(target)
                 if not ok:
                     try:
                         target.unlink(missing_ok=True)  # type: ignore[call-arg]
@@ -1137,7 +1137,7 @@ def upload_project_files() -> Any:
                     )
                 runtime_plan_path().write_bytes(target.read_bytes())
                 plan_rt = runtime_plan_path()
-                ok2, reason2 = validate_layout_raster(plan_rt)
+                ok2, reason2, _wh2 = validate_layout_raster(plan_rt)
                 if not ok2:
                     try:
                         plan_rt.unlink(missing_ok=True)  # type: ignore[call-arg]
