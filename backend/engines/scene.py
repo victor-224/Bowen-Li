@@ -17,6 +17,7 @@ from backend.asset_contract import (
     AssetContractViolation,
     load_asset,
 )
+from backend.core.input_contract import evaluate_input_contract
 from backend.engines.geometry import geometry_engine
 from backend.locator import detect_positions_with_confidence, pixel_to_mm
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -39,11 +40,20 @@ def safe_load_image(path: str) -> Optional[Any]:
 def _degraded_empty_layout(
     equipment: Mapping[str, Mapping[str, Any]],
     warning: str = "missing_demo_asset",
+    input_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return a safe empty-layout scene that keeps downstream contracts stable."""
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions_mm={})
-    scene: Dict[str, Any] = empty_scene({"layout": "empty", "warning": warning})
+    contract = input_contract or {}
+    scene: Dict[str, Any] = empty_scene(
+        {
+            "layout": "empty",
+            "warning": warning,
+            "input_state": contract.get("state", "degraded_layout"),
+            "input_contract": contract,
+        }
+    )
     scene["equipment"] = items
     scene["walls"] = []
     scene["rooms"] = []
@@ -64,6 +74,7 @@ def build_scene_document(
     """
     # Contract-governed input. Any violation surfaces as AssetContractViolation
     # which the API layer translates into a structured ASSET_* error.
+
     try:
         safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
     except AssetContractViolation:
@@ -73,7 +84,16 @@ def build_scene_document(
         logger.warning(
             "Demo plan.png missing or corrupted, switching to empty layout mode"
         )
-        return _degraded_empty_layout(equipment, warning="missing_demo_asset")
+        contract = evaluate_input_contract(
+            excel=equipment,
+            layout_image=None,
+            plan_path=None,
+        )
+        return _degraded_empty_layout(
+            equipment,
+            warning="missing_demo_asset",
+            input_contract=contract,
+        )
     if safe_load_image(str(safe_plan)) is None:
         logger.warning(
             "Layout image unavailable (demo or upload corrupted). Pipeline continues in degraded mode."
@@ -81,7 +101,23 @@ def build_scene_document(
         logger.warning(
             "Demo plan.png missing or corrupted, switching to empty layout mode"
         )
-        return _degraded_empty_layout(equipment, warning="missing_demo_asset")
+        contract = evaluate_input_contract(
+            excel=equipment,
+            layout_image=str(safe_plan),
+            plan_path=str(safe_plan),
+        )
+        return _degraded_empty_layout(
+            equipment,
+            warning="missing_demo_asset",
+            input_contract=contract,
+        )
+
+    # Evaluate contract with resolved plan path so state is explicit and accurate.
+    contract = evaluate_input_contract(
+        excel=equipment,
+        layout_image=str(safe_plan),
+        plan_path=str(safe_plan),
+    )
 
     allowed_tags = set(str(t) for t in equipment.keys())
     detected = (
@@ -110,6 +146,9 @@ def build_scene_document(
     scene["walls"] = wall_info.get("walls", [])
     scene["rooms"] = wall_info.get("rooms", [])
     scene["center"] = wall_info.get("center", [0.0, 0.0])
+    scene.setdefault("meta", {})
+    scene["meta"]["input_state"] = contract.get("state", "valid")
+    scene["meta"]["input_contract"] = contract
     return geometry_engine(scene)
 
 
