@@ -24,6 +24,7 @@ from backend.core.spatial_contract import SpatialMode, make_spatial_contract
 from backend.core.spatial_truth_ledger import log_spatial_event, validate_contract_usage
 from backend.core.spatial_source_normalizer import normalize_spatial_sources
 from backend.core.spatial_canonical_model import build_canonical_space
+from backend.core.spatial_authority import resolve_spatial_authority
 from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -262,22 +263,50 @@ def build_scene_document(
         _img_dims = cv2.imread(str(safe_plan), cv2.IMREAD_COLOR)
     plan_width_mm = 17500.0
     if _img_dims is None:
-        canonical: list[dict[str, Any]] = []
+        canonical = []
+        image_shape: tuple[int, int] | None = None
     else:
         _h, _w = _img_dims.shape[:2]
-        canonical = build_canonical_space(normalized, (_w, _h), plan_width_mm=plan_width_mm)
+        image_shape = (_w, _h)
+        canonical = build_canonical_space(normalized, image_shape, plan_width_mm=plan_width_mm)
 
     positions_full = pixel_to_mm(pixel_positions, safe_plan)
-    positions: Dict[str, tuple[float, float]] = {}
+    cluster_mm: Dict[str, tuple[float, float]] = {}
+    for tag, v in detected.items():
+        if isinstance(v, dict) and str(v.get("source")) == "cluster_estimate":
+            if tag in positions_full:
+                cluster_mm[tag] = positions_full[tag]
+
+    authority = resolve_spatial_authority(
+        canonical_points=canonical,
+        layout_mm_points=positions_full,
+        cluster_points=cluster_mm,
+        contract=spatial_contract,
+        allowed_tags=allowed_tags,
+        image_shape=image_shape,
+        plan_width_mm=plan_width_mm,
+    )
+
+    if authority.get("mode") != "FINAL":
+        degraded_contract = {
+            **contract,
+            "execution_policy": policy,
+            "spatial_authority": authority,
+        }
+        return _degraded_empty_layout(
+            equipment,
+            warning="spatial_authority_no_trusted",
+            input_contract=degraded_contract,
+            spatial_contract=spatial_contract,
+        )
+
+    positions = {
+        str(k): (float(v[0]), float(v[1])) for k, v in (authority.get("points") or {}).items()
+    }
     for tag in allowed_tags:
         rec = norm_by_tag.get(tag)
-        if rec is not None and not bool(rec.get("is_valid_spatial")):
-            positions[tag] = (0.0, 0.0)
+        if rec is not None:
             conf_map[tag] = float(rec.get("confidence", conf_map.get(tag, 0.0)))
-        else:
-            positions[tag] = positions_full.get(tag, (0.0, 0.0))
-            if rec is not None:
-                conf_map[tag] = float(rec.get("confidence", conf_map.get(tag, 0.0)))
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions)
     wall_info = parse_walls_and_rooms(safe_plan)
@@ -297,6 +326,7 @@ def build_scene_document(
     scene["meta"]["spatial_contract"] = spatial_contract
     scene["meta"]["spatial_normalized"] = normalized
     scene["meta"]["spatial_canonical"] = canonical
+    scene["meta"]["spatial_authority"] = authority
     usage_check = validate_contract_usage(
         contract=spatial_contract,
         scene_input_source=_extract_spatial_source(detected),
