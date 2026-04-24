@@ -27,6 +27,11 @@ const infoNearestEl = document.getElementById("info-nearest");
 const cancelBtn = document.getElementById("cancel-task-btn");
 const taskProgressEl = document.getElementById("task-progress");
 const taskProgressWrap = document.getElementById("task-progress-wrap");
+const statusStageEl = document.getElementById("status-stage");
+const statusLabelEl = document.getElementById("status-label");
+const statusPctEl = document.getElementById("status-pct");
+const statusErrorLine = document.getElementById("status-error-line");
+const statusCompletedLine = document.getElementById("status-completed-line");
 const copilotInput = document.getElementById("copilot-input");
 const copilotOutput = document.getElementById("copilot-output");
 const copilotSend = document.getElementById("copilot-send");
@@ -36,6 +41,12 @@ let _entrySeq = 0;
 /** @type {Array<{ id: string, file: File, role: 'layout' | 'equipment' | 'supporting' | 'other', manualOverride: boolean }>} */
 let selectedFiles = [];
 let lastUserError = "";
+/** @type {object | null} */
+let lastPipelineSnapshot = null;
+/** @type {object | null} */
+let lastEquipmentData = null;
+/** @type {{ code: string, message: string, stage: string, raw: string } | null} */
+let lastTaskError = null;
 
 const BADGE = {
   layout: { className: "badge badge-layout", label: "Layout plan" },
@@ -58,6 +69,88 @@ function pushLog(message, level = "info") {
 function setProcessStatus(message, isError = false) {
   processStatusEl.textContent = message;
   processStatusEl.className = isError ? "error" : "";
+}
+
+function applyTaskRecordToErrorState(task) {
+  if (!task || task.status !== "failed") return;
+  const d = task.error;
+  if (d && typeof d === "object" && d.message) {
+    lastTaskError = {
+      code: String(d.code != null ? d.code : "PIPELINE_ERROR"),
+      message: String(d.message),
+      stage: String(d.stage != null ? d.stage : task.stage || ""),
+    };
+  } else if (d != null) {
+    const raw = String(d);
+    lastTaskError = {
+      code: String(task.error_code != null ? task.error_code : "PIPELINE_ERROR"),
+      message: raw,
+      stage: String(task.stage || ""),
+      raw: raw,
+    };
+  }
+}
+
+/**
+ * @param {object} [task] - from GET /api/task/:id, or null
+ * @param {"idle" | "uploading" | "error" | "ready"} [mode]
+ * @param {string} [externalError]
+ */
+function updateStatusPanelFromTask(task, mode, externalError) {
+  if (statusStageEl) statusStageEl.textContent = "—";
+  if (statusLabelEl) statusLabelEl.textContent = "—";
+  if (statusPctEl) statusPctEl.textContent = "—";
+  if (statusErrorLine) {
+    statusErrorLine.textContent = "";
+    statusErrorLine.hidden = true;
+  }
+  if (statusCompletedLine) {
+    statusCompletedLine.textContent = "";
+    statusCompletedLine.hidden = true;
+  }
+  if (mode === "uploading" && statusStageEl) {
+    statusStageEl.textContent = "upload";
+    if (statusLabelEl) statusLabelEl.textContent = "Uploading";
+  }
+  if (mode === "error" && externalError && statusErrorLine) {
+    statusErrorLine.textContent = externalError;
+    statusErrorLine.hidden = false;
+  }
+  if (mode === "ready" && statusCompletedLine) {
+    statusCompletedLine.textContent = "Ready — load new files to process again.";
+    statusCompletedLine.hidden = false;
+  }
+  if (!task) return;
+  if (statusStageEl) statusStageEl.textContent = String(task.stage != null ? task.stage : "—");
+  if (statusLabelEl) {
+    const st = task.status;
+    statusLabelEl.textContent = st ? stageLabel(st) : "—";
+  }
+  if (statusPctEl) {
+    const p = task.progress;
+    statusPctEl.textContent = p != null && Number.isFinite(Number(p)) ? `${Math.round(Number(p))}%` : "—";
+  }
+  if (task.status === "failed" && task.error != null && statusErrorLine) {
+    const d = task.error;
+    let line = "";
+    if (typeof d === "object" && d.message) {
+      line = `${d.code || task.error_code || "ERROR"}: ${d.message}${d.stage ? ` (stage: ${d.stage})` : ""}`;
+    } else {
+      const raw = String(d);
+      const code = task.error_code ? String(task.error_code) : "ERROR";
+      line = task.error_code ? `${code}: ${raw}` : raw;
+    }
+    statusErrorLine.textContent = line;
+    statusErrorLine.hidden = false;
+  }
+  if (task.status === "done" && statusCompletedLine) {
+    statusCompletedLine.textContent = "Last run: completed successfully.";
+    statusCompletedLine.hidden = false;
+  }
+  if (task.status === "cancelled" && statusCompletedLine) {
+    statusCompletedLine.textContent = "Last run: cancelled.";
+    statusCompletedLine.hidden = false;
+  }
 }
 
 function setTaskProgress(pct) {
@@ -237,6 +330,99 @@ function stageLabel(status) {
   return map[status] || status;
 }
 
+const MAX_COPILOT_JSON = 10000;
+
+/**
+ * Build a JSON-serializable object for Copilot: project data + last task error.
+ * @param {string} [userMessage] - heuristics to include graph/scene/vision blocks
+ */
+function buildProjectContext(userMessage) {
+  const u = (userMessage || "").toLowerCase();
+  const wantAll = u.length < 2;
+  const wantGraph = wantAll || /graph|edge|node|zone|layout graph|relation/.test(u);
+  const wantScene = wantAll || /scene|3d|mesh|position|coordinate/.test(u);
+  const wantVision = wantAll || /vision|vlm|detect|label|image|photo/.test(u);
+  const wantEquip = wantAll || /equipment|tag|excel|summar|list|pump|vessel/.test(u);
+  const wantErr = wantAll || /fail|error|upload|why|cancel|timeout|stuck/.test(u);
+  const wantWalls = wantAll || /wall|room|center/.test(u);
+
+  const out = {
+    source: "industrial-digital-twin-frontend",
+    hasPipeline: Boolean(lastPipelineSnapshot),
+    note: "Prefer facts from this JSON. If a field is empty, say so; use general guidance only as fallback.",
+  };
+  if (wantEquip && lastEquipmentData) {
+    out.equipment = lastEquipmentData;
+  }
+  if (wantGraph && lastPipelineSnapshot && lastPipelineSnapshot.layout_graph) {
+    out.layout_graph = lastPipelineSnapshot.layout_graph;
+  }
+  if (wantGraph && lastPipelineSnapshot && lastPipelineSnapshot.relations) {
+    out.relations = lastPipelineSnapshot.relations;
+  }
+  if (wantWalls && lastPipelineSnapshot && lastPipelineSnapshot.walls) {
+    out.walls = lastPipelineSnapshot.walls;
+  }
+  if (wantScene && lastPipelineSnapshot) {
+    out.scene = lastPipelineSnapshot.scene;
+  }
+  if (wantVision && lastPipelineSnapshot && lastPipelineSnapshot.vision) {
+    out.vision = lastPipelineSnapshot.vision;
+  }
+  if (wantErr && lastTaskError) {
+    out.last_task_error = lastTaskError;
+  }
+  if (Object.keys(out).length <= 3) {
+    if (lastPipelineSnapshot) {
+      if (lastPipelineSnapshot.layout_graph) out.layout_graph = lastPipelineSnapshot.layout_graph;
+      out.scene = lastPipelineSnapshot.scene;
+      if (lastPipelineSnapshot.vision) out.vision = lastPipelineSnapshot.vision;
+    }
+    if (lastEquipmentData) out.equipment = lastEquipmentData;
+    if (lastTaskError) out.last_task_error = lastTaskError;
+  }
+  return out;
+}
+
+function budgetProjectContext(ctx) {
+  let s = JSON.stringify(ctx);
+  if (s.length <= MAX_COPILOT_JSON) return ctx;
+  const lg = ctx.layout_graph;
+  const slim = {
+    source: ctx.source,
+    hasPipeline: ctx.hasPipeline,
+    note: "Context was too large; sending equipment, errors, and compact graph index only.",
+    equipment: ctx.equipment,
+    last_task_error: ctx.last_task_error,
+    relations:
+      ctx.relations && typeof ctx.relations === "object"
+        ? { _keyCount: Object.keys(ctx.relations).length, _sample: Object.fromEntries(
+            Object.entries(ctx.relations).slice(0, 15)
+          ) }
+        : undefined,
+    layout_graph:
+      lg && typeof lg === "object"
+        ? {
+            nodes: Array.isArray(lg.nodes) ? lg.nodes.slice(0, 25) : lg.nodes,
+            edges: Array.isArray(lg.edges) ? lg.edges.slice(0, 25) : lg.edges,
+            zones: Array.isArray(lg.zones) ? lg.zones.slice(0, 10) : lg.zones,
+          }
+        : undefined,
+    scene_item_count: Array.isArray(ctx.scene) ? ctx.scene.length : null,
+    vision: ctx.vision,
+  };
+  s = JSON.stringify(slim);
+  if (s.length > MAX_COPILOT_JSON) {
+    return {
+      source: ctx.source,
+      note: "Severe trim: pass equipment and errors only.",
+      equipment: ctx.equipment,
+      last_task_error: ctx.last_task_error,
+    };
+  }
+  return slim;
+}
+
 async function pollTaskUntilDone(taskId, timeoutMs = 180000, abortSignal) {
   const t0 = Date.now();
   let lastMessage = "Starting task";
@@ -247,22 +433,41 @@ async function pollTaskUntilDone(taskId, timeoutMs = 180000, abortSignal) {
     const label = stageLabel(task.status);
     const p = task.progress;
     if (p != null && taskProgressEl) setTaskProgress(p);
-    lastMessage = `${label}: ${task.message || ""} (${p != null ? p : 0}%)`.trim();
+    const detailLine = task.message || "";
+    lastMessage = detailLine
+      ? `${label} · ${detailLine} · ${p != null ? Math.round(Number(p)) : 0}%`
+      : `${label} · ${p != null ? Math.round(Number(p)) : 0}%`;
     setProcessStatus(lastMessage);
+    updateStatusPanelFromTask(task);
     if (task.status === "done") {
       if (taskProgressEl) setTaskProgress(100);
+      lastTaskError = null;
       return task;
     }
     if (task.status === "cancelled") throw new Error("Task cancelled by user.");
     if (task.status === "failed") {
       if (taskProgressEl) setTaskProgress(task.progress);
       const detail = task.error;
-      if (detail && typeof detail === "object") {
+      if (detail && typeof detail === "object" && "message" in detail) {
+        lastTaskError = {
+          code: String(detail.code != null ? detail.code : "PIPELINE_ERROR"),
+          message: String(detail.message),
+          stage: String(detail.stage != null ? detail.stage : task.stage || ""),
+        };
+        updateStatusPanelFromTask(task);
         throw new Error(
           `${detail.code || "PIPELINE_ERROR"}: ${detail.message || "Processing failed"}`
         );
       }
-      throw new Error(String(detail || "Processing failed"));
+      const raw = String(detail || "Processing failed");
+      lastTaskError = {
+        code: String(task.error_code != null ? task.error_code : "PIPELINE_ERROR"),
+        message: raw,
+        stage: String(task.stage || ""),
+        raw: raw,
+      };
+      updateStatusPanelFromTask(task);
+      throw new Error(raw);
     }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     delayMs = Math.min(4000, Math.floor(delayMs * 1.5));
@@ -280,11 +485,16 @@ async function cancelTask(taskId) {
 }
 
 const COPILOT_PRESETS = {
-  layout: "Explain the current plant layout: zones, main equipment flow, and what the 3D scene is showing (based on typical refinery or process plant context).",
-  risks: "What are plausible safety or layout risk factors in an industrial P&ID-style floor plan (access, clearances, congestion)? Give general professional guidance, not as verified plant facts.",
-  optimize: "What placement or routing optimizations are commonly considered for process equipment in plant layout, at a high level?",
-  equipment: "Summarize how to read a typical equipment list in Excel (columns like tag, service, size) in this application context.",
-  failed: "The user may have a pipeline or upload issue. If context below mentions an error, explain in plain language what it usually means and what to check next. Context:\n",
+  layout:
+    "Explain the layout for this project using the PROJECT DATA (scene, equipment, layout_graph, vision if present). Say what is known from the data vs unknown.",
+  risks:
+    "Using the graph, equipment, and relations in PROJECT DATA, what layout or access risks are plausible? If data is thin, state that and give general industry cautions only.",
+  optimize:
+    "Given the current equipment positions in PROJECT DATA, what high-level placement or routing improvements are worth considering?",
+  equipment:
+    "Summarize the equipment in PROJECT DATA: list key tags, services, and counts. If equipment is empty, say so clearly.",
+  failed:
+    "Why did processing fail? Use last_task_error in PROJECT DATA first. Explain the code in plain language and what the user should check. If no error is present, say no recent failure is recorded.",
 };
 
 let copilotLoading = false;
@@ -304,10 +514,11 @@ async function callCopilot(message) {
   copilotLoading = true;
   copilotOutput.innerHTML = '<span class="copilot-loading">Thinking…</span>';
   try {
+    const ctx = budgetProjectContext(buildProjectContext(m));
     const res = await fetch(`${API_BASE}/api/copilot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: m, context: "industrial-digital-twin" }),
+      body: JSON.stringify({ message: m, project_context: ctx }),
     });
     const data = await res.json().catch(() => ({}));
     if (data && data.success && typeof data.content === "string" && data.content) {
@@ -584,6 +795,8 @@ async function refreshScene() {
     }),
     fetchJson("/api/status").catch(() => ({ missing: [], files: {} })),
   ]);
+  lastEquipmentData = equipment;
+  lastPipelineSnapshot = pipeline;
   renderEquipment(equipment);
   const sceneDoc = pipeline.scene || pipeline;
   const wallsDoc = pipeline.walls || {};
@@ -649,10 +862,12 @@ async function handleUploadClick() {
   setTaskProgress(0);
   setUploadMessage("Uploading…");
   setProcessStatus("Uploading…");
+  updateStatusPanelFromTask(null, "uploading");
   try {
     const upload = await uploadProjectFiles();
     activeTaskId = upload.task_id || null;
     lastUserError = "";
+    lastTaskError = null;
     pushLog(`Upload accepted, task ${activeTaskId || "N/A"}`);
     if (activeTaskId) {
       cancelBtn.disabled = false;
@@ -660,11 +875,13 @@ async function handleUploadClick() {
     }
     await refreshScene();
     setUploadMessage("Project files processed successfully.");
-    setProcessStatus("Ready");
+    setProcessStatus("Pipeline completed. Scene updated.");
+    updateStatusPanelFromTask({ status: "done", stage: "done", progress: 100, message: "Completed" });
     setStatus("Connected to API.");
   } catch (e) {
     const msg = String(e.message || e);
     lastUserError = msg;
+    lastTaskError = { code: "PIPELINE_OR_UPLOAD", message: msg, stage: "client" };
     let userMsg = msg;
     if (msg.includes("OCR_FAILED")) userMsg = "OCR failed: no equipment tags detected in layout.";
     else if (msg.includes("INVALID_EXCEL")) userMsg = "Excel format invalid: required sheet 'Equipment_list' not found.";
@@ -680,8 +897,10 @@ async function handleUploadClick() {
     } else if (msg.toLowerCase().includes("plan image not found") || msg.includes("missing required")) {
       userMsg = "Add both a plan drawing and a valid .xlsx if the server reports missing files.";
     } else if (msg.toLowerCase().includes("timeout")) userMsg = `Processing timeout. ${msg}`;
+    lastTaskError = { code: "PIPELINE_OR_UPLOAD", message: userMsg, stage: "client" };
     setUploadMessage(userMsg, true);
     setProcessStatus(userMsg, true);
+    updateStatusPanelFromTask(null, "error", userMsg);
     pushLog(userMsg, "error");
     setStatus(`Backend/API error (${API_BASE}): ${userMsg}`, true);
   } finally {
@@ -697,7 +916,7 @@ function wireCopilot() {
     if (t && t.getAttribute("data-copilot")) {
       const k = t.getAttribute("data-copilot");
       let p = COPILOT_PRESETS[k] || copilotInput.value;
-      if (k === "failed") p = COPILOT_PRESETS.failed + (lastUserError || logPanelEl.textContent.slice(0, 1200) || "No error yet.");
+      if (k === "failed") p = COPILOT_PRESETS.failed;
       callCopilot(p);
     }
   });
@@ -728,7 +947,18 @@ async function main() {
   try {
     await refreshScene();
     setStatus("Connected to API.");
-    setProcessStatus("Idle");
+    setProcessStatus("Idle — load project files to run the pipeline, or use Copilot for help.");
+    updateStatusPanelFromTask(null);
+    try {
+      const lr = await fetch(`${API_BASE}/api/task/latest`);
+      const latest = await lr.json().catch(() => ({}));
+      if (latest && latest.status === "failed" && (latest.error != null || latest.error_code)) {
+        applyTaskRecordToErrorState(latest);
+        updateStatusPanelFromTask(latest);
+      }
+    } catch {
+      // ignore
+    }
     if (taskProgressEl) {
       taskProgressEl.removeAttribute("value");
       if (taskProgressWrap) taskProgressWrap.classList.add("empty");
@@ -737,6 +967,7 @@ async function main() {
   } catch (e) {
     setStatus(`Failed to load API (${API_BASE}). Start Flask on :5000. ${e.message}`, true);
     setProcessStatus("Backend offline", true);
+    updateStatusPanelFromTask(null, "error", e.message);
     if (taskProgressEl) {
       taskProgressEl.removeAttribute("value");
     }

@@ -59,7 +59,14 @@
 
       <div class="card" id="status-section">
         <h2>Pipeline status</h2>
-        <p id="process-status">Idle</p>
+        <p class="status-primary" id="process-status">Idle</p>
+        <div class="status-detail" id="status-detail">
+          <div><span class="status-k">Stage</span> <code id="status-stage">—</code></div>
+          <div><span class="status-k">Label</span> <span id="status-label">—</span></div>
+          <div><span class="status-k">Progress</span> <span id="status-pct">—</span></div>
+        </div>
+        <p class="status-error-line" id="status-error-line" hidden></p>
+        <p class="status-note" id="status-completed-line" hidden></p>
         <div class="task-progress-wrap" id="task-progress-wrap">
           <progress id="task-progress" max="100" value="0" aria-label="Task progress">0%</progress>
         </div>

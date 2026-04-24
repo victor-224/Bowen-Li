@@ -293,8 +293,36 @@ details.advanced summary {
   margin: 0.4rem 0 0;
 }
 
-#process-status { margin: 0; font-size: 0.9rem; }
+#process-status { margin: 0; font-size: 0.95rem; font-weight: 500; }
 #process-status.error { color: var(--danger); }
+
+.status-primary { margin: 0 0 0.4rem; }
+
+.status-detail {
+  display: grid;
+  gap: 0.2rem 0.75rem;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  margin: 0 0 0.4rem;
+}
+.status-detail .status-k { color: var(--text-muted); min-width: 3.2rem; display: inline-block; }
+.status-detail code { font-size: 0.8rem; background: #eef1f5; padding: 0.05rem 0.3rem; border-radius: 3px; }
+#status-pct { font-weight: 600; color: var(--text); }
+
+.status-error-line {
+  margin: 0.4rem 0 0;
+  font-size: 0.86rem;
+  color: var(--danger);
+  padding: 0.4rem 0.5rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+}
+.status-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.86rem;
+  color: var(--success);
+}
 
 #task-progress {
   width: 100%;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import logging
 import os
 import threading
@@ -508,11 +509,33 @@ _COPILOT_SYSTEM = (
     "drawings. Answer in plain language. If you lack plant-specific data, say so and give general guidance."
 )
 _COPILOT_MODEL = "qwen3-8b-instruct"
+_COPILOT_CONTEXT_BUDGET = 12000
+_COPILOT_MSG_BUDGET = 4000
+
+
+def _serialize_copilot_context(obj: Any) -> str:
+    """Render optional client-provided project snapshot; trim to budget."""
+    if obj is None or obj == {} or obj == []:
+        return ""
+    try:
+        if isinstance(obj, str):
+            s = obj.strip()
+        else:
+            s = json.dumps(obj, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        s = str(obj)[:_COPILOT_CONTEXT_BUDGET]
+    if len(s) > _COPILOT_CONTEXT_BUDGET:
+        return s[: _COPILOT_CONTEXT_BUDGET - 3] + "..."
+    return s
 
 
 @app.post("/api/copilot")
 def post_copilot() -> Any:
-    """Local LLM chat for the UI; never 500 for LM Studio offline (fail-soft JSON)."""
+    """Local LLM chat for the UI; never 500 for LM Studio offline (fail-soft JSON).
+
+    Accepts ``project_context`` (dict/list/str) with equipment, graph, scene, vision, errors.
+    Merged into the user message so the model prefers project facts over generic advice.
+    """
     try:
         data = request.get_json(silent=True) or {}
         user_msg = (data.get("message") or "").strip()
@@ -540,9 +563,22 @@ def post_copilot() -> Any:
             200,
         )
     try:
+        ctx_raw = data.get("project_context")
+        ctx_str = _serialize_copilot_context(ctx_raw)
+        if ctx_str:
+            user_content = (
+                "When answering, prefer concrete facts from PROJECT DATA (JSON) below. "
+                "If data is missing, say so briefly and use general industry guidance only where needed.\n\n"
+                "--- PROJECT DATA (JSON) ---\n"
+                f"{ctx_str}\n"
+                "--- END ---\n\n"
+                f"User question:\n{user_msg[:_COPILOT_MSG_BUDGET]}"
+            )
+        else:
+            user_content = user_msg[:8000]
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": _COPILOT_SYSTEM},
-            {"role": "user", "content": user_msg[:8000]},
+            {"role": "user", "content": user_content},
         ]
         out = call_lmstudio_model(
             _COPILOT_MODEL, messages, temperature=0.3, timeout=45, max_tokens=1024
