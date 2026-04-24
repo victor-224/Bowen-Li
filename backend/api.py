@@ -41,6 +41,7 @@ from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
+from backend.plan_upload_validate import validate_layout_raster
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -69,6 +70,15 @@ _VISION_PROMPT = (
 _VISION_TIMEOUT_S = 20
 
 _RUNTIME_STATE = RuntimeState()
+_UPLOAD_LOG = logging.getLogger("industrial_digital_twin.upload")
+
+# Reduce OpenCV console noise (e.g. corrupt PNG IHDR warnings) in demo mode.
+try:
+    import cv2.utils.logging as _cv2_log
+
+    _cv2_log.setLogLevel(_cv2_log.LOG_LEVEL_ERROR)
+except Exception:  # noqa: BLE001
+    pass
 
 TASK_QUEUED = "queued"
 TASK_VALIDATING = "validating"
@@ -227,6 +237,25 @@ def _invalidate_spatial_runtime_cache(*, clear_positions: bool = False) -> Dict[
             except OSError:
                 cleared_positions = False
     return {"payload_cache_cleared": int(cleared_payloads), "positions_cache_cleared": bool(cleared_positions)}
+
+
+def _layout_upload_validation_message(reason: str) -> str:
+    r = (reason or "").strip()
+    if r == "invalid_png_signature":
+        return (
+            "Uploaded layout is not a valid PNG file (wrong file header). "
+            "Export the drawing as PNG or upload PDF instead."
+        )
+    if r == "invalid_jpeg_signature":
+        return "Uploaded layout is not a valid JPEG file. Re-export the image or use PDF/PNG."
+    if r == "opencv_decode_failed":
+        return (
+            "Layout image could not be decoded (file may be truncated, renamed, or not an image). "
+            "Re-upload a real PNG/JPEG or use PDF."
+        )
+    if r == "file_is_pdf_not_image":
+        return "Layout file was saved as image but content looks like PDF. Upload it as plan_file with .pdf extension."
+    return f"Layout validation failed ({r or 'unknown'})."
 
 
 def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1055,11 +1084,67 @@ def upload_project_files() -> Any:
             if target.suffix.lower() == ".pdf":
                 try:
                     first_page_to_layout_png(target, runtime_plan_path())
+                    ok_pdf, reason_pdf = validate_layout_raster(runtime_plan_path())
+                    if not ok_pdf:
+                        rp = runtime_plan_path()
+                        try:
+                            rp.unlink(missing_ok=True)  # type: ignore[call-arg]
+                        except TypeError:
+                            if rp.is_file():
+                                rp.unlink()
+                        _UPLOAD_LOG.warning(
+                            "[SPATIAL_TRACE] layout pdf render invalid reason=%s file=%s",
+                            reason_pdf,
+                            name,
+                        )
+                        return _error_response_struct(
+                            "INVALID_LAYOUT_IMAGE",
+                            _layout_upload_validation_message(reason_pdf),
+                            TASK_VALIDATING,
+                            400,
+                        )
                     plan_saved = True
                 except Exception as e:
                     return _error_response(f"Invalid layout PDF: {e}", 400)
             else:
+                ok, reason = validate_layout_raster(target)
+                if not ok:
+                    try:
+                        target.unlink(missing_ok=True)  # type: ignore[call-arg]
+                    except TypeError:
+                        if target.is_file():
+                            target.unlink()
+                    _UPLOAD_LOG.warning(
+                        "[SPATIAL_TRACE] layout rejected before commit reason=%s file=%s",
+                        reason,
+                        name,
+                    )
+                    return _error_response_struct(
+                        "INVALID_LAYOUT_IMAGE",
+                        _layout_upload_validation_message(reason),
+                        TASK_VALIDATING,
+                        400,
+                    )
                 runtime_plan_path().write_bytes(target.read_bytes())
+                plan_rt = runtime_plan_path()
+                ok2, reason2 = validate_layout_raster(plan_rt)
+                if not ok2:
+                    try:
+                        plan_rt.unlink(missing_ok=True)  # type: ignore[call-arg]
+                    except TypeError:
+                        if plan_rt.is_file():
+                            plan_rt.unlink()
+                    _UPLOAD_LOG.warning(
+                        "[SPATIAL_TRACE] runtime plan invalid after copy reason=%s file=%s",
+                        reason2,
+                        name,
+                    )
+                    return _error_response_struct(
+                        "INVALID_LAYOUT_IMAGE",
+                        _layout_upload_validation_message(reason2),
+                        TASK_VALIDATING,
+                        400,
+                    )
                 plan_saved = True
             continue
 
