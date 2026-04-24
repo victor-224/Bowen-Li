@@ -20,6 +20,7 @@ from backend.asset_contract import (
 from backend.core.execution_policy import resolve_execution_policy
 from backend.core.input_contract import evaluate_input_contract
 from backend.core.spatial_contract import SpatialMode, make_spatial_contract
+from backend.core.spatial_truth_ledger import log_spatial_event, validate_contract_usage
 from backend.engines.geometry import geometry_engine
 from backend.locator import pixel_to_mm, resolve_spatial_positions_with_contract
 from backend.scene_spec import build_equipment_list, empty_scene
@@ -73,6 +74,17 @@ def _degraded_empty_layout(
     scene["rooms"] = []
     scene["center"] = [0.0, 0.0]
     return geometry_engine(scene)
+
+
+def _extract_spatial_source(detected: Mapping[str, Any]) -> str:
+    counts: Dict[str, int] = {}
+    for value in detected.values():
+        if isinstance(value, dict):
+            src = str(value.get("source") or "unknown")
+            counts[src] = counts.get(src, 0) + 1
+    if not counts:
+        return "none"
+    return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
 def build_scene_document(
@@ -173,6 +185,19 @@ def build_scene_document(
         spatial_contract = dict(resolved.get("spatial_contract", {}))
 
     # CRITICAL GATE: synthetic / degraded modes must not feed scene geometry.
+    source = _extract_spatial_source(detected)
+    usage_check = validate_contract_usage(contract=spatial_contract, scene_input_source=source)
+    log_spatial_event(
+        {
+            "stage": "scene",
+            "source": source,
+            "contract_mode": spatial_contract.get("spatial_mode", SpatialMode.DEGRADED),
+            "scene_allowed": bool(spatial_contract.get("scene_allowed")),
+            "used_in_scene": False,
+            "bypass_detected": bool(usage_check.get("bypass_detected")),
+            "reason": usage_check.get("violation_type", "NONE"),
+        }
+    )
     if not bool(spatial_contract.get("scene_allowed")):
         return _degraded_empty_layout(
             equipment,
@@ -206,6 +231,24 @@ def build_scene_document(
     scene["meta"]["input_contract"] = contract
     scene["meta"]["execution_policy"] = policy
     scene["meta"]["spatial_contract"] = spatial_contract
+    usage_check = validate_contract_usage(
+        contract=spatial_contract,
+        scene_input_source=_extract_spatial_source(detected),
+    )
+    log_spatial_event(
+        {
+            "stage": "scene",
+            "source": _extract_spatial_source(detected),
+            "contract_mode": spatial_contract.get("spatial_mode", SpatialMode.DEGRADED),
+            "scene_allowed": bool(spatial_contract.get("scene_allowed")),
+            "used_in_scene": True,
+            "bypass_detected": bool(usage_check.get("bypass_detected")),
+            "reason": usage_check.get("violation_type", "NONE"),
+        }
+    )
+    scene["meta"]["spatial_truth_status"] = (
+        "VIOLATION" if usage_check.get("bypass_detected") else "CLEAN"
+    )
     return geometry_engine(scene)
 
 

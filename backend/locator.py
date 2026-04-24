@@ -14,6 +14,7 @@ from backend.core.spatial_contract import (
     SpatialMode,
     build_spatial_integrity_contract,
 )
+from backend.core.spatial_truth_ledger import log_spatial_event
 from backend.pickpoint import pick_points_on_plan
 
 _TAG_PATTERN = re.compile(r"[A-Z]\s*\d{2,4}\s*[A-Z]?", re.IGNORECASE)
@@ -380,6 +381,18 @@ def resolve_spatial_positions_with_contract(
             visual_allowed=True,
             reason=reason or ("plan unreadable" if not plan_readable else "empty detection"),
         )
+
+    log_spatial_event(
+        {
+            "stage": "locator",
+            "source": source,
+            "contract_mode": contract.get("spatial_mode", SpatialMode.DEGRADED),
+            "scene_allowed": bool(contract.get("scene_allowed", False)),
+            "used_in_scene": False,
+            "bypass_detected": False,
+            "reason": contract.get("reason") or reason or "locator_contract_resolved",
+        }
+    )
 
     return {"positions": positions, "spatial_contract": contract}
 

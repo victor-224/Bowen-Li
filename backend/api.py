@@ -34,6 +34,7 @@ from backend.config import (
     get_lm_studio_chat_url,
     lm_studio_url_from_env,
 )
+from backend.core.spatial_truth_ledger import summarize_truth_status
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
@@ -436,6 +437,8 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "relations": relations,
             "walls": walls_doc,
             "layout_graph": layout_graph,
+            "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+            "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
             "phase_c": {
                 "pid_links": pid_links,
                 "topology_optimization": topology,
@@ -495,6 +498,8 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         "relations": relations,
         "walls": walls_doc,
         "layout_graph": layout_graph,
+        "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
+        "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
         "phase_c": {
             "pid_links": pid_links,
             "topology_optimization": topology,
