@@ -12,6 +12,7 @@ import os
 import socket
 import threading
 import time
+import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, MutableMapping, Optional
 
@@ -302,14 +303,41 @@ def _classify_pipeline_error_code(message: str, default: str = "PIPELINE_ERROR")
 
 
 def _excel_path() -> Path:
+    classified = classify_files(data_dir_path())
+    candidates: List[Path] = []
+
     runtime_excel = runtime_excel_path()
     if runtime_excel.is_file():
-        return runtime_excel
-    classified = classify_files(data_dir_path())
+        candidates.append(runtime_excel)
+
     xlsx = classified.get("excel")
     if xlsx:
+        p = Path(str(xlsx))
+        if p not in candidates:
+            candidates.append(p)
+
+    default_excel = _repo_root() / _EXCEL_REL
+    if default_excel not in candidates:
+        candidates.append(default_excel)
+
+    # Prefer first readable xlsx. If runtime copy is corrupted/truncated,
+    # automatically fall back to another valid source instead of hard-failing
+    # the entire pipeline.
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            if zipfile.is_zipfile(p):
+                return p
+        except OSError:
+            continue
+
+    # Preserve old behavior when no usable candidate exists.
+    if runtime_excel.is_file():
+        return runtime_excel
+    if xlsx:
         return Path(str(xlsx))
-    return _repo_root() / _EXCEL_REL
+    return default_excel
 
 
 def plan_image_path() -> Path:

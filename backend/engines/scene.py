@@ -21,6 +21,24 @@ from backend.walls import parse_walls_and_rooms
 SCENE_STAGE = "scene_render"
 
 
+def _degraded_empty_scene(
+    equipment: Mapping[str, Mapping[str, Any]],
+    reason: str,
+) -> Dict[str, Any]:
+    rows = equipment_dict_to_list(equipment)
+    scene: Dict[str, Any] = empty_scene({"spatial_system": "two_layer_pixel_to_world"})
+    scene["equipment"] = build_equipment_list(rows, {})
+    scene["walls"] = []
+    scene["rooms"] = []
+    scene["center"] = [0.0, 0.0]
+    scene.setdefault("meta", {})
+    scene["meta"]["degraded"] = True
+    scene["meta"]["degraded_reason"] = reason
+    scene["meta"]["spatial_points_count"] = 0
+    scene["meta"]["spatial_scene_allowed"] = False
+    return geometry_engine(scene)
+
+
 def _plan_shape(plan: Path) -> tuple[int, int]:
     with opencv_imread_quiet():
         img = cv2.imread(str(plan), cv2.IMREAD_COLOR)
@@ -145,8 +163,11 @@ def build_scene_document(
         image_shape = (1920, 1080)
         safe_plan: Optional[Path] = None
     else:
-        safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
-        image_shape = _plan_shape(safe_plan)
+        try:
+            safe_plan = load_asset(PLAN_IMAGE_CONTRACT, stage=SCENE_STAGE, override_path=plan_path)
+            image_shape = _plan_shape(safe_plan)
+        except AssetContractViolation as exc:
+            return _degraded_empty_scene(equipment, reason=str(exc))
     if detected_positions is None:
         raw_detected = detect_positions_with_confidence(
             plan_path=safe_plan,
