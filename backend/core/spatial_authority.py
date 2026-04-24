@@ -1,4 +1,8 @@
-"""Spatial Authority Layer — single final spatial output for scene geometry."""
+"""Spatial Authority Layer — single truth gate for layout-mm coordinates (scene input).
+
+All other pipelines (normalizer, canonical, pixel_to_mm proposals) produce candidates only.
+Scene geometry must consume only ``points`` from this module's output.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,6 @@ from backend.core.spatial_contract import SpatialMode
 
 
 def _score_points(points: Mapping[str, Any]) -> float:
-    """Aggregate confidence score for a tag -> point map."""
     if not isinstance(points, Mapping) or not points:
         return 0.0
     total = 0.0
@@ -55,6 +58,21 @@ def _canonical_to_layout_mm(
     return out
 
 
+def _confidence_map_from_normalized(
+    normalized: List[Mapping[str, Any]],
+    tags: set[str],
+) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for row in normalized:
+        if not isinstance(row, Mapping):
+            continue
+        tag = str(row.get("tag") or "").strip()
+        if tag not in tags:
+            continue
+        out[tag] = float(row.get("confidence", 0.0) or 0.0)
+    return out
+
+
 def resolve_spatial_authority(
     *,
     canonical_points: List[Mapping[str, Any]],
@@ -64,20 +82,16 @@ def resolve_spatial_authority(
     allowed_tags: Optional[set[str]] = None,
     image_shape: Optional[Tuple[int, int]] = None,
     plan_width_mm: float = 17500.0,
+    normalized_points: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Single decision for final layout-mm coordinates fed to scene equipment.
+    Single truth gate. ``cluster_points`` never influences winner; only ``proposals_debug``.
 
-    ``cluster_points`` is never used for FINAL geometry (debug / proposals only).
-
-    Returns:
-      - mode: "FINAL" | "NO_SPATIAL"
-      - winner: "canonical" | "layout" | None
-      - points: Dict[tag, (x_mm, y_mm)]  (subset or full allowed_tags)
-      - reason, scores, proposals_cluster (for debug only)
+    Returns keys: mode, points, rejected_sources, reason, confidence_map, proposals_debug
+    (points values are [x_mm, y_mm] lists for JSON stability.)
     """
     c = dict(contract) if isinstance(contract, Mapping) else {}
-    mode = str(c.get("spatial_mode") or SpatialMode.DEGRADED).upper()
+    spatial_mode = str(c.get("spatial_mode") or SpatialMode.DEGRADED).upper()
     scene_allowed = bool(c.get("scene_allowed"))
 
     layout: Dict[str, Tuple[float, float]] = {
@@ -99,26 +113,34 @@ def resolve_spatial_authority(
             plan_width_mm=plan_width_mm,
         )
 
+    # Winner scoring: canonical vs layout only — cluster never participates.
     scores = {
         "canonical": _score_points(canonical_layout),
         "layout": _score_points(layout),
-        "cluster": _score_points(cluster),
     }
 
-    if not scene_allowed or mode == SpatialMode.VISUAL_ONLY:
+    proposals_debug: Dict[str, Any] = {"cluster_estimate": dict(cluster)}
+
+    def _no_spatial(reason: str, rejected: List[str]) -> Dict[str, Any]:
         return {
             "mode": "NO_SPATIAL",
-            "winner": None,
             "points": {},
-            "reason": "contract disallows scene geometry",
-            "scores": scores,
-            "proposals_cluster": cluster,
+            "rejected_sources": rejected,
+            "reason": reason,
+            "confidence_map": {},
+            "proposals_debug": proposals_debug,
         }
 
+    if not scene_allowed or spatial_mode == SpatialMode.VISUAL_ONLY:
+        rej = ["cluster_estimate", "canonical_chain", "layout_mm_proposal"]
+        if cluster:
+            rej.append("cluster_proposals_only_debug")
+        return _no_spatial("contract disallows scene geometry", rej)
+
     winner: Optional[str] = None
-    if mode == SpatialMode.REAL:
+    if spatial_mode == SpatialMode.REAL:
         winner = "canonical" if scores["canonical"] > 0 else "layout"
-    elif mode == SpatialMode.DEGRADED:
+    elif spatial_mode == SpatialMode.DEGRADED:
         if scores["layout"] > 0:
             winner = "layout"
         elif scores["canonical"] > 0:
@@ -129,36 +151,40 @@ def resolve_spatial_authority(
         winner = "canonical" if scores["canonical"] > 0 else ("layout" if scores["layout"] > 0 else None)
 
     if winner is None or scores.get(winner, 0) <= 0:
-        return {
-            "mode": "NO_SPATIAL",
-            "winner": None,
-            "points": {},
-            "reason": "no trusted spatial source",
-            "scores": scores,
-            "proposals_cluster": cluster,
-        }
+        return _no_spatial(
+            "no trusted spatial source",
+            ["canonical_chain", "layout_mm_proposal", "cluster_estimate_debug_only"],
+        )
 
-    src: Dict[str, Tuple[float, float]]
-    if winner == "canonical":
-        src = dict(canonical_layout)
-    else:
-        src = dict(layout)
-
+    src = dict(canonical_layout) if winner == "canonical" else dict(layout)
     tags = allowed_tags if allowed_tags is not None else set(src.keys())
-    final: Dict[str, Tuple[float, float]] = {}
+
+    rejected_sources: List[str] = ["cluster_estimate"]
+    if cluster:
+        rejected_sources.append("cluster_geometry_forbidden")
+    if winner == "canonical" and scores["layout"] > 0:
+        rejected_sources.append("layout_mm_not_authoritative")
+    if winner == "layout" and scores["canonical"] > 0:
+        rejected_sources.append("canonical_chain_not_authoritative")
+
+    points: Dict[str, List[float]] = {}
     for tag in tags:
         if tag in src:
-            final[tag] = src[tag]
+            x, y = src[tag]
+            points[tag] = [round(float(x), 6), round(float(y), 6)]
         else:
-            final[tag] = (0.0, 0.0)
+            points[tag] = [0.0, 0.0]
+
+    norm = list(normalized_points) if normalized_points else []
+    confidence_map = _confidence_map_from_normalized(norm, tags)
 
     return {
         "mode": "FINAL",
-        "winner": winner,
-        "points": final,
+        "points": points,
+        "rejected_sources": rejected_sources,
         "reason": f"authority_winner={winner}",
-        "scores": scores,
-        "proposals_cluster": cluster,
+        "confidence_map": confidence_map,
+        "proposals_debug": proposals_debug,
     }
 
 

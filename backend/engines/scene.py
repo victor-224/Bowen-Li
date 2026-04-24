@@ -228,14 +228,12 @@ def build_scene_document(
             spatial_contract=spatial_contract,
         )
     pixel_positions: Dict[str, tuple[int, int]] = {}
-    conf_map: Dict[str, float] = {}
     raw_points: list[dict[str, object]] = []
     for tag, v in detected.items():
         if isinstance(v, dict):
             p = v.get("pos", [0, 0])
             pixel_positions[tag] = (int(p[0]), int(p[1]))
             c = float(v.get("confidence", 0.0))
-            conf_map[tag] = c
             raw_points.append(
                 {
                     "tag": tag,
@@ -246,7 +244,6 @@ def build_scene_document(
             )
         else:
             pixel_positions[tag] = (int(v[0]), int(v[1]))
-            conf_map[tag] = 0.7
             raw_points.append(
                 {
                     "tag": tag,
@@ -256,8 +253,9 @@ def build_scene_document(
                 }
             )
 
+    conf_map: Dict[str, float] = {}
+
     normalized = normalize_spatial_sources(raw_points)
-    norm_by_tag = {str(r["tag"]): r for r in normalized}
 
     with opencv_imread_quiet():
         _img_dims = cv2.imread(str(safe_plan), cv2.IMREAD_COLOR)
@@ -285,6 +283,7 @@ def build_scene_document(
         allowed_tags=allowed_tags,
         image_shape=image_shape,
         plan_width_mm=plan_width_mm,
+        normalized_points=normalized,
     )
 
     if authority.get("mode") != "FINAL":
@@ -300,13 +299,15 @@ def build_scene_document(
             spatial_contract=spatial_contract,
         )
 
-    positions = {
-        str(k): (float(v[0]), float(v[1])) for k, v in (authority.get("points") or {}).items()
+    # Single geometry source: authority output only (layout-mm tuples for scene_spec).
+    positions = {}
+    for tag, xy in (authority.get("points") or {}).items():
+        if isinstance(xy, (list, tuple)) and len(xy) >= 2:
+            positions[str(tag)] = (float(xy[0]), float(xy[1]))
+    conf_map = {
+        str(k): float(v)
+        for k, v in (authority.get("confidence_map") or {}).items()
     }
-    for tag in allowed_tags:
-        rec = norm_by_tag.get(tag)
-        if rec is not None:
-            conf_map[tag] = float(rec.get("confidence", conf_map.get(tag, 0.0)))
     rows = equipment_dict_to_list(equipment)
     items = build_equipment_list(rows, positions)
     wall_info = parse_walls_and_rooms(safe_plan)
