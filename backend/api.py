@@ -12,9 +12,11 @@ import os
 import socket
 import threading
 import time
+import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, MutableMapping, Optional
 
+import cv2
 import openpyxl
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -34,15 +36,13 @@ from backend.config import (
     get_lm_studio_chat_url,
     lm_studio_url_from_env,
 )
-from backend.core.policy_engine import resolve_policy
-from backend.core.spatial_truth_ledger import summarize_truth_status
-from backend.core.spatial_payload import sanitize_spatial_payload
 from backend.models.vision.vision_schema import normalize_vision_output
 from backend.models.vision.vl_interface import run_vision_model
 from backend.runtime_state import RuntimeState
 from backend.topology_optimizer import optimize_topology
 from backend.plan_upload_validate import validate_layout_raster
 from backend.layout_inspector import inspect_runtime_layout
+from backend.opencv_util import opencv_imread_quiet
 
 SHEET_NAME = "Equipment_list"
 # Real annex: column B = TAG, C = SERVICE, D = POSITION (or TEMA), E/F/G = dimensions (mm)
@@ -193,6 +193,56 @@ def data_dir_path() -> Path:
     return _repo_root() / "data"
 
 
+def _is_runtime_excel_corrupted(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size < 1024:
+            return True
+    except OSError:
+        return True
+    try:
+        return not zipfile.is_zipfile(path)
+    except OSError:
+        return True
+
+
+def _is_runtime_plan_corrupted(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size < 1024:
+            return True
+    except OSError:
+        return True
+    with opencv_imread_quiet():
+        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return img is None
+
+
+def _sanitize_runtime_inputs_on_startup() -> None:
+    """Remove clearly corrupted runtime artifacts to avoid boot-time failures."""
+    rt_excel = runtime_excel_path()
+    if _is_runtime_excel_corrupted(rt_excel):
+        try:
+            rt_excel.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except TypeError:
+            if rt_excel.is_file():
+                rt_excel.unlink()
+        except OSError:
+            pass
+
+    rt_plan = runtime_plan_path()
+    if _is_runtime_plan_corrupted(rt_plan):
+        try:
+            rt_plan.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except TypeError:
+            if rt_plan.is_file():
+                rt_plan.unlink()
+        except OSError:
+            pass
+
+
 def _path_like_to_json(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
@@ -264,10 +314,9 @@ def _get_or_build_pipeline_sync(equipment: Optional[Dict[str, Dict[str, Any]]] =
     cached = _RUNTIME_STATE.get_cached_payload(signature)
     if cached is not None:
         _CACHE_STATS["hit"] += 1
-        return sanitize_spatial_payload(cached, route="cache_hit")
+        return cached
     _CACHE_STATS["miss"] += 1
     payload = build_pipeline_output(equipment)
-    payload = sanitize_spatial_payload(payload, route="cache_store")
     _RUNTIME_STATE.set_cached_payload(signature=signature, payload=payload)
     return payload
 
@@ -306,19 +355,46 @@ def _classify_pipeline_error_code(message: str, default: str = "PIPELINE_ERROR")
 
 
 def _excel_path() -> Path:
+    classified = classify_files(data_dir_path())
+    candidates: List[Path] = []
+
     runtime_excel = runtime_excel_path()
     if runtime_excel.is_file():
-        return runtime_excel
-    classified = classify_files(data_dir_path())
+        candidates.append(runtime_excel)
+
     xlsx = classified.get("excel")
     if xlsx:
+        p = Path(str(xlsx))
+        if p not in candidates:
+            candidates.append(p)
+
+    default_excel = _repo_root() / _EXCEL_REL
+    if default_excel not in candidates:
+        candidates.append(default_excel)
+
+    # Prefer first readable xlsx. If runtime copy is corrupted/truncated,
+    # automatically fall back to another valid source instead of hard-failing
+    # the entire pipeline.
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            if zipfile.is_zipfile(p):
+                return p
+        except OSError:
+            continue
+
+    # Preserve old behavior when no usable candidate exists.
+    if runtime_excel.is_file():
+        return runtime_excel
+    if xlsx:
         return Path(str(xlsx))
-    return _repo_root() / _EXCEL_REL
+    return default_excel
 
 
 def plan_image_path() -> Path:
     runtime_plan = runtime_plan_path()
-    if runtime_plan.is_file():
+    if runtime_plan.is_file() and not _is_runtime_plan_corrupted(runtime_plan):
         return runtime_plan
     classified = classify_files(data_dir_path())
     layout_src = classified.get("layout")
@@ -493,22 +569,6 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             "walls": walls_doc,
             "layout_graph": layout_graph,
             "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
-            "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
-            "spatial_decision_summary": {
-                "preflight_valid": bool(preflight.get("valid")),
-                "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
-                "authority_reason": str(authority.get("reason") or ""),
-                "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
-            },
-            "policy": resolve_policy(
-                contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
-                ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
-                runtime_context={
-                    "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
-                    "input_state": scene_doc.get("meta", {}).get("input_state"),
-                },
-            ),
-            "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
             "phase_c": {
                 "pid_links": pid_links,
                 "topology_optimization": topology,
@@ -516,7 +576,7 @@ def build_pipeline_output(equipment: Optional[Dict[str, Dict[str, Any]]] = None)
             },
         }
         _maybe_attach_vision(payload)
-        return sanitize_spatial_payload(payload, route="build_pipeline_output")
+        return payload
     except Exception:
         status = "error"
         raise
@@ -563,31 +623,12 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         source_files=source_files,
     )
     _transition(task_id, TASK_FINALIZING, 95, "Finalizing")
-    meta = scene_doc.get("meta", {}) if isinstance(scene_doc, dict) else {}
-    authority = meta.get("spatial_authority", {}) if isinstance(meta, dict) else {}
-    preflight = meta.get("spatial_preflight", {}) if isinstance(meta, dict) else {}
     payload = {
         "scene": scene_doc.get("equipment", []),
         "relations": relations,
         "walls": walls_doc,
         "layout_graph": layout_graph,
         "layout_inspector": inspect_runtime_layout(runtime_plan_path()),
-        "spatial_contract": scene_doc.get("meta", {}).get("spatial_contract", {}),
-        "spatial_decision_summary": {
-            "preflight_valid": bool(preflight.get("valid")),
-            "authority_mode": str(authority.get("mode") or "NO_SPATIAL"),
-            "authority_reason": str(authority.get("reason") or ""),
-            "trusted_point_count": int(preflight.get("trusted_point_count") or 0),
-        },
-        "policy": resolve_policy(
-            contract=scene_doc.get("meta", {}).get("spatial_contract", {}),
-            ai_status={"available": bool(scene_doc.get("meta", {}).get("execution_policy", {}).get("ai_usage_level") != "disabled")},
-            runtime_context={
-                "scene_mode_hint": scene_doc.get("meta", {}).get("execution_policy", {}).get("scene_mode"),
-                "input_state": scene_doc.get("meta", {}).get("input_state"),
-            },
-        ),
-        "spatial_truth_status": summarize_truth_status(runtime_dir_path()),
         "phase_c": {
             "pid_links": pid_links,
             "topology_optimization": topology,
@@ -595,7 +636,6 @@ def _build_pipeline_dag(ctx: PipelineContext) -> Dict[str, Any]:
         },
     }
     _maybe_attach_vision(payload)
-    payload = sanitize_spatial_payload(payload, route="build_pipeline_dag")
     _RUNTIME_STATE.set_cached_payload(signature=ctx.signature, payload=payload)
     return payload
 
@@ -606,6 +646,8 @@ CORS(
     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}},
     supports_credentials=True,
 )
+
+_sanitize_runtime_inputs_on_startup()
 
 _COPILOT_LOG = logging.getLogger("industrial_digital_twin.copilot")
 _AI_CFG_LOG = logging.getLogger("industrial_digital_twin.ai_config")

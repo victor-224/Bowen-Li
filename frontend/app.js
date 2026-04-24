@@ -3,6 +3,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const API_BASE = "http://localhost:5000";
 const MM = 0.001;
+// Spread model positions for better readability (visual only).
+const POSITION_VISUAL_SCALE = 2.8;
+const MIN_SAFE_GAP_M = 3.0;
 
 const statusEl = document.getElementById("status");
 const listEl = document.getElementById("equipment-list");
@@ -336,15 +339,11 @@ function formatUploadError(body, httpStatus) {
 }
 
 /**
- * Used for spatial: only Yes/No after spatial contract is known; "—" while pipeline has not applied contract yet.
- * @param {object} info - layout_inspector + optional spatial_contract_scene_allowed, spatial_contract_pending
+ * Used for spatial: read directly from layout inspector.
+ * @param {object} info - layout_inspector payload
  */
 function usedForSpatialDisplay(info) {
-  const sc = info.spatial_contract_scene_allowed;
-  if (info.spatial_contract_pending || sc === undefined) {
-    return "—";
-  }
-  if (sc === false) return "No";
+  if (info.used_for_spatial === undefined || info.used_for_spatial === null) return "—";
   return info.used_for_spatial ? "Yes" : "No";
 }
 
@@ -368,16 +367,7 @@ function updateLayoutInspectorPanel(info) {
   if (inspectorReadableEl) inspectorReadableEl.textContent = info.readable ? "Yes" : "No";
   if (inspectorSpatialEl) inspectorSpatialEl.textContent = usedForSpatialDisplay(info);
   if (inspectorNoteEl) {
-    const sc = info.spatial_contract_scene_allowed;
-    if (info.spatial_contract_pending || sc === undefined) {
-      inspectorNoteEl.textContent =
-        "Pipeline running or contract not loaded yet — \"Used for spatial\" shows Yes/No only after the spatial contract is applied.";
-      inspectorNoteEl.hidden = false;
-    } else if (sc === false) {
-      inspectorNoteEl.textContent =
-        "Spatial contract: scene not using layout coordinates (equipment-only / degraded).";
-      inspectorNoteEl.hidden = false;
-    } else if (info.validation_reason && !info.validation_ok) {
+    if (info.validation_reason && !info.validation_ok) {
       inspectorNoteEl.textContent = `Validation: ${info.validation_reason}`;
       inspectorNoteEl.hidden = false;
     } else {
@@ -396,10 +386,7 @@ async function uploadProjectFiles() {
     throw new Error(`Upload failed: ${reason}`);
   }
   if (body.layout_inspector) {
-    updateLayoutInspectorPanel({
-      ...body.layout_inspector,
-      spatial_contract_pending: true,
-    });
+    updateLayoutInspectorPanel(body.layout_inspector);
   }
   return body;
 }
@@ -807,13 +794,17 @@ function buildMesh(geometryType, row) {
 
 function positionMeters(row) {
   if (row && Number.isFinite(Number(row.x)) && Number.isFinite(Number(row.y))) {
-    return new THREE.Vector3(num(row.x, 0), 0, num(row.y, 0));
+    return new THREE.Vector3(num(row.x, 0) * POSITION_VISUAL_SCALE, 0, num(row.y, 0) * POSITION_VISUAL_SCALE);
   }
   const pm = row ? row.position_mm : null;
   if (Array.isArray(pm) && pm.length >= 2) {
-    return new THREE.Vector3(num(pm[0], 0) * MM, 0, num(pm[1], 0) * MM);
+    return new THREE.Vector3(num(pm[0], 0) * MM * POSITION_VISUAL_SCALE, 0, num(pm[1], 0) * MM * POSITION_VISUAL_SCALE);
   }
-  return new THREE.Vector3(num(pm?.x, 0) * MM, num(pm?.y, 0) * MM, num(pm?.z, 0) * MM);
+  return new THREE.Vector3(
+    num(pm?.x, 0) * MM * POSITION_VISUAL_SCALE,
+    num(pm?.y, 0) * MM * POSITION_VISUAL_SCALE,
+    num(pm?.z, 0) * MM * POSITION_VISUAL_SCALE
+  );
 }
 
 function createTagSprite(text) {
@@ -843,10 +834,8 @@ function normalizeSceneItems(sceneDoc) {
   return [];
 }
 
-function isSpatialSceneAllowed(pipelineDoc) {
-  const c = pipelineDoc && pipelineDoc.spatial_contract;
-  if (!c || typeof c !== "object") return true;
-  return Boolean(c.scene_allowed);
+function isSpatialSceneAllowed(_pipelineDoc) {
+  return true;
 }
 
 function updateInfoPanel(row) {
@@ -951,10 +940,34 @@ function populateEquipmentMeshes(threeCtx, items) {
     labelGroup.remove(o);
     disposeObject3D(o);
   }
+  const placed = [];
+  function applySafeSpacing(baseVec, minGapM = MIN_SAFE_GAP_M) {
+    const p = baseVec.clone();
+    const maxIter = 80;
+    for (let i = 0; i < maxIter; i += 1) {
+      let moved = false;
+      for (const q of placed) {
+        const dx = p.x - q.x;
+        const dz = p.z - q.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist < minGapM) {
+          const nx = dist > 1e-6 ? dx / dist : (Math.random() - 0.5);
+          const nz = dist > 1e-6 ? dz / dist : (Math.random() - 0.5);
+          const push = (minGapM - dist) * 0.55;
+          p.x += nx * push;
+          p.z += nz * push;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    placed.push(p.clone());
+    return p;
+  }
   for (const row of items) {
     const gt = row.geometry_type || "cylinder";
     const mesh = buildMesh(gt, row);
-    const base = positionMeters(row);
+    const base = applySafeSpacing(positionMeters(row), MIN_SAFE_GAP_M);
     mesh.position.set(base.x, 0, base.z);
     mesh.userData.tag = row.tag;
     mesh.userData.row = row;
@@ -988,24 +1001,15 @@ async function refreshScene() {
   const wallsDoc = pipeline.walls || {};
   const relationsDoc = pipeline.relations || {};
   const meta = sceneDoc.meta || sceneDoc?.scene?.meta || {};
-  const sceneAllowed = isSpatialSceneAllowed(pipeline);
-  const items = sceneAllowed ? normalizeSceneItems(sceneDoc) : [];
+  const items = normalizeSceneItems(sceneDoc);
   const wallsCount = Array.isArray(wallsDoc.walls)
     ? wallsDoc.walls.length
     : Array.isArray(sceneDoc.walls)
       ? sceneDoc.walls.length
       : 0;
   const relCount = typeof relationsDoc === "object" ? Object.keys(relationsDoc).length : 0;
-  const modeNote = sceneAllowed ? "Spatial mode: scene enabled" : "Equipment Only Mode — No spatial scene available";
+  const modeNote = "Spatial mode: pixel_to_world";
   sceneMetaEl.textContent = `Project: ${meta.project ?? "Industrial Digital Twin"} · 3D items: ${items.length} · walls: ${wallsCount} · relations: ${relCount} · missing: ${(statusDoc.missing || []).join(", ") || "none"} · ${modeNote}`;
-  if (!sceneAllowed) {
-    if (!_spatialBlockLogged) {
-      pushLog("[SPATIAL_TRACE] frontend blocked fake render (scene_allowed=false)", "warn");
-      _spatialBlockLogged = true;
-    }
-  } else {
-    _spatialBlockLogged = false;
-  }
   populateEquipmentMeshes(threeCtx, items);
   updateInfoPanel(items[0] || null);
   const box = new THREE.Box3().setFromObject(threeCtx.equipmentGroup);
@@ -1018,34 +1022,14 @@ async function refreshScene() {
     threeCtx.controls.target.copy(center);
     threeCtx.controls.update();
   }
-  const scKnown =
-    pipeline.spatial_contract &&
-    typeof pipeline.spatial_contract === "object" &&
-    pipeline.spatial_contract.scene_allowed !== undefined &&
-    pipeline.spatial_contract.scene_allowed !== null;
-
   if (pipeline.layout_inspector) {
-    const merged = {
-      ...pipeline.layout_inspector,
-      spatial_contract_pending: !scKnown,
-    };
-    if (scKnown) {
-      merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
-    }
-    updateLayoutInspectorPanel(merged);
+    updateLayoutInspectorPanel(pipeline.layout_inspector);
   } else {
     try {
       const inspRes = await fetch(`${API_BASE}/api/layout/inspect`);
       const inspBody = await inspRes.json().catch(() => ({}));
       if (inspBody.success && inspBody.layout_inspector) {
-        const merged = {
-          ...inspBody.layout_inspector,
-          spatial_contract_pending: !scKnown,
-        };
-        if (scKnown) {
-          merged.spatial_contract_scene_allowed = pipeline.spatial_contract.scene_allowed;
-        }
-        updateLayoutInspectorPanel(merged);
+        updateLayoutInspectorPanel(inspBody.layout_inspector);
       }
     } catch {
       // ignore
